@@ -1,0 +1,35 @@
+User-agent: *
+Allow: /
+Allow: /sitemap.xml
+Allow: /sitemap-landings.xml
+Allow: /sitemap-blog.xml
+Allow: /sitemap-templates.xml
+Allow: /sitemap-programmatic.xml
+Allow: /rss.xml
+Allow: /llms.txt
+
+# AI Agents & LLM Search Crawlers
+User-agent: GPTBot
+Allow: /
+Allow: /llms.txt
+
+User-agent: ClaudeBot
+Allow: /
+Allow: /llms.txt
+
+User-agent: Google-Extended
+Allow: /
+Allow: /llms.txt
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /llms.txt
+
+User-agent: CCBot
+Allow: /
+
+Sitemap: https://planner.amplificagroup.com/sitemap.xml
+Sitemap: https://planner.amplificagroup.com/sitemap-landings.xml
+Sitemap: https://planner.amplificagroup.com/sitemap-blog.xml
+Sitemap: https://planner.amplificagroup.com/sitemap-templates.xml
+Sitemap: https://planner.amplificagroup.com/sitemap-programmatic.xml

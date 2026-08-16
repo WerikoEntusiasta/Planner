@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --color-accent-purple-light: #E9D5FF;
+  --color-accent-purple: #8B5CF6;
+  --color-accent-purple-dark: #7C3AED;
+  --color-accent-purple-glow: rgba(139, 92, 246, 0.15);
+
+  --color-accent-orange-light: #FFEDD5;
+  --color-accent-orange: #FF6B00;
+  --color-accent-orange-dark: #EA580C;
+  --color-accent-orange-glow: rgba(255, 107, 0, 0.15);
+
+  --color-panel-black: #09090B;
+  --color-panel-card: #121215;
+  --color-panel-card-hover: #1A1A1E;
+  --color-panel-border: #27272A;
+  --color-panel-border-glow: #3F3F46;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-panel-black);
+    color: #F4F4F5;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Custom subtle scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #09090B;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #27272A;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3F3F46;
+  }
+}
+
+/* Animations and extra styles */
+.gradient-border-purple {
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--color-panel-card), var(--color-panel-card)), 
+                    linear-gradient(135deg, var(--color-accent-purple), transparent);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+.gradient-border-orange {
+  border: 1px solid transparent;
+  background-image: linear-gradient(var(--color-panel-card), var(--color-panel-card)), 
+                    linear-gradient(135deg, var(--color-accent-orange), transparent);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+}
+
+.gradient-title {
+  background: linear-gradient(135deg, #FFFFFF 40%, var(--color-accent-purple) 70%, var(--color-accent-orange) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

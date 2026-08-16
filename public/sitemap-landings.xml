@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <!-- Português Landings -->
+  <url>
+    <loc>https://planner.amplificagroup.com/planner-de-conteudo</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <xhtml:link rel="alternate" hreflang="pt-BR" href="https://planner.amplificagroup.com/planner-de-conteudo"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://planner.amplificagroup.com/en/content-planner"/>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/calendario-editorial</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+    <xhtml:link rel="alternate" hreflang="pt-BR" href="https://planner.amplificagroup.com/calendario-editorial"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://planner.amplificagroup.com/en/editorial-calendar"/>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/calendario-de-conteudo</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+    <xhtml:link rel="alternate" hreflang="pt-BR" href="https://planner.amplificagroup.com/calendario-de-conteudo"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://planner.amplificagroup.com/en/content-calendar"/>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/planner-instagram</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/planner-redes-sociais</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/planner-com-ia</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/gestao-de-conteudo</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+
+  <!-- English Landings -->
+  <url>
+    <loc>https://planner.amplificagroup.com/en/content-planner</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <xhtml:link rel="alternate" hreflang="pt-BR" href="https://planner.amplificagroup.com/planner-de-conteudo"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://planner.amplificagroup.com/en/content-planner"/>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/en/content-calendar</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/en/editorial-calendar</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/en/social-media-planner</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/en/ai-content-planner</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/en/content-planning-software</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://planner.amplificagroup.com/en/marketing-calendar</loc>
+    <lastmod>2026-08-07</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+</urlset>

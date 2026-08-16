@@ -1,0 +1,57 @@
+version: '3.8'
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: creator-planner
+  author: Werik Oliveira
+  category: Productivity
+  developer: Werik Oliveira
+  icon: https://cdn-icons-png.flaticon.com/512/3652/3652191.png
+  port_map: "3000"
+  scheme: http
+  title:
+    en_us: Creator Planner
+    pt_br: Creator Planner
+  tagline:
+    en_us: Premium Multichannel Content Planner SaaS
+    pt_br: Planner de Conteúdo Multicanal SaaS Premium
+  description:
+    en_us: A premium multichannel content planner for creators and marketing teams with client approvals, coming-soon AI content script generators, and interactive goals trackers.
+    pt_br: Um planejador de conteúdo multicanal premium para criadores e equipes de marketing, com aprovação rápida de clientes, gerador de roteiros por IA e acompanhamento de metas.
+
+services:
+  creator-planner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: werikoliveira/planner:0.1
+    container_name: creator_planner_saas
+    ports:
+      - "3000:3000"
+    volumes:
+      - /DATA/AppData/creator-planner/dados:/dados
+    environment:
+      - TZ=America/Sao_Paulo
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - STRIPE_PRICE_BASIC_MONTHLY_BRL=${STRIPE_PRICE_BASIC_MONTHLY_BRL}
+      - STRIPE_PRICE_BASIC_QUARTERLY_BRL=${STRIPE_PRICE_BASIC_QUARTERLY_BRL}
+      - STRIPE_PRICE_PRO_MONTHLY_BRL=${STRIPE_PRICE_PRO_MONTHLY_BRL}
+      - STRIPE_PRICE_PRO_QUARTERLY_BRL=${STRIPE_PRICE_PRO_QUARTERLY_BRL}
+      - STRIPE_PRICE_GROWTH_MONTHLY_BRL=${STRIPE_PRICE_GROWTH_MONTHLY_BRL}
+      - STRIPE_PRICE_GROWTH_QUARTERLY_BRL=${STRIPE_PRICE_GROWTH_QUARTERLY_BRL}
+      - STRIPE_PRICE_BASIC_MONTHLY_USD=${STRIPE_PRICE_BASIC_MONTHLY_USD}
+      - STRIPE_PRICE_BASIC_QUARTERLY_USD=${STRIPE_PRICE_BASIC_QUARTERLY_USD}
+      - STRIPE_PRICE_PRO_MONTHLY_USD=${STRIPE_PRICE_PRO_MONTHLY_USD}
+      - STRIPE_PRICE_PRO_QUARTERLY_USD=${STRIPE_PRICE_PRO_QUARTERLY_USD}
+      - STRIPE_PRICE_GROWTH_MONTHLY_USD=${STRIPE_PRICE_GROWTH_MONTHLY_USD}
+      - STRIPE_PRICE_GROWTH_QUARTERLY_USD=${STRIPE_PRICE_GROWTH_QUARTERLY_USD}
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
