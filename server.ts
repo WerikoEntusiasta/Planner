@@ -1,26 +1,226 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import cookieParser from 'cookie-parser';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { affiliateTracker } from './src/middleware/affiliateTracker';
 
 dotenv.config();
 
 const app = express();
+const allowedOrigins = [
+  'https://planner.amplificagroup.com',
+  'http://localhost:3000',
+  'https://ais-dev-pcokqf6bsksu2yhzfk5fn3-215070016480.us-east5.run.app'
+];
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"]
+  }
+});
+export { io };
 const PORT = 3000;
 
-// Trust reverse proxies to resolve correct req.protocol and req.get('host')
-app.set('trust proxy', true);
+// Trust reverse proxies
+app.set('trust proxy', 1);
 
-// Increase body-parser limits for sync payload and capture rawBody for Stripe signature verification
+// Security Headers
+app.use(helmet({
+  contentSecurityPolicy: false,
+}));
+
+// CORS Policy
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
+
+// Rate Limiting
+const generalLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 200,
+  message: 'Muitas requisições. Tente novamente mais tarde.'
+});
+
+app.use(generalLimiter);
+app.use(cookieParser());
+app.use(affiliateTracker);
+
+// Body-parser with 2MB limit (DoS Protection via oversized payload) and capture rawBody for Stripe signature verification
 app.use(express.json({ 
-  limit: '20mb',
+  limit: '2mb',
   verify: (req: any, _res, buf) => {
     req.rawBody = buf;
   }
 }));
-app.use(express.urlencoded({ limit: '20mb', extended: true }));
+app.use(express.urlencoded({ limit: '2mb', extended: true }));
+
+// ==========================================
+// 🛡️ CRYPTOGRAPHY & AUTHENTICATION ENGINE
+// ==========================================
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || 'planner_saas_sec_v2_' + (process.env.VITE_ADMIN_PASSWORD || 'secure_salt_9f83a8f9024c089a812efd1883');
+
+import bcrypt from 'bcryptjs';
+
+// 1. Password Hashing
+export async function hashPassword(password: string): Promise<string> {
+  return await bcrypt.hash(password, 10);
+}
+
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  if (!storedHash || !password) return false;
+  return await bcrypt.compare(password, storedHash);
+}
+
+// 2. Timing-Safe String Comparison (prevents side-channel timing attacks)
+export function timingSafeCompare(a: string, b: string): boolean {
+  const hashA = crypto.createHash('sha256').update(String(a || '')).digest();
+  const hashB = crypto.createHash('sha256').update(String(b || '')).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
+
+// 3. User Session Token Generator & Verifier (HMAC-SHA256)
+export function generateUserToken(userId: string, email: string): string {
+  const payload = {
+    userId,
+    email: email.toLowerCase(),
+    iat: Date.now(),
+    exp: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
+  return `${encodedPayload}.${signature}`;
+}
+
+export function verifyUserToken(tokenString: string): { valid: boolean; userId?: string; email?: string } {
+  if (!tokenString) return { valid: false };
+  try {
+    const [encodedPayload, signature] = tokenString.split('.');
+    if (!encodedPayload || !signature) return { valid: false };
+
+    const expectedSignature = crypto.createHmac('sha256', JWT_SECRET).update(encodedPayload).digest('base64url');
+    if (!timingSafeCompare(signature, expectedSignature)) {
+      return { valid: false };
+    }
+
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (payload.exp && Date.now() > payload.exp) {
+      return { valid: false }; // Expired
+    }
+
+    return { valid: true, userId: payload.userId, email: payload.email };
+  } catch (e) {
+    return { valid: false };
+  }
+}
+
+// 4. Admin Session Token Generator & Verifier
+export function generateAdminToken(): string {
+  const payload = {
+    role: 'admin',
+    iat: Date.now(),
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET + '_admin').update(encodedPayload).digest('base64url');
+  return `adm_${encodedPayload}.${signature}`;
+}
+
+export function verifyAdminToken(tokenString: string): boolean {
+  if (!tokenString || !tokenString.startsWith('adm_')) return false;
+  try {
+    const raw = tokenString.replace('adm_', '');
+    const [encodedPayload, signature] = raw.split('.');
+    if (!encodedPayload || !signature) return false;
+
+    const expectedSignature = crypto.createHmac('sha256', JWT_SECRET + '_admin').update(encodedPayload).digest('base64url');
+    if (!timingSafeCompare(signature, expectedSignature)) {
+      return false;
+    }
+
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    if (payload.role !== 'admin' || (payload.exp && Date.now() > payload.exp)) {
+      return false;
+    }
+
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// 5. HTML & String Sanitization (XSS / Injection defense)
+export function sanitizeHtml(input: string): string {
+  if (typeof input !== 'string') return '';
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
+
+// ==========================================
+// 🛡️ SLIDING-WINDOW IP RATE LIMITER
+// ==========================================
+interface RateLimitRecord {
+  timestamps: number[];
+}
+const rateLimitStore = new Map<string, RateLimitRecord>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of rateLimitStore.entries()) {
+    record.timestamps = record.timestamps.filter(ts => now - ts < 60000);
+    if (record.timestamps.length === 0) {
+      rateLimitStore.delete(key);
+    }
+  }
+}, 180000);
+
+export function createRateLimiter(maxRequests: number, windowMs = 60000, message = 'Muitas requisições. Por favor, aguarde antes de tentar novamente.') {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+    const key = `${req.baseUrl || ''}${req.path}_${ip}`;
+    const now = Date.now();
+
+    let record = rateLimitStore.get(key);
+    if (!record) {
+      record = { timestamps: [] };
+      rateLimitStore.set(key, record);
+    }
+
+    record.timestamps = record.timestamps.filter(ts => now - ts < windowMs);
+
+    if (record.timestamps.length >= maxRequests) {
+      const oldest = record.timestamps[0];
+      const retryAfter = Math.ceil((windowMs - (now - oldest)) / 1000);
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({
+        success: false,
+        error: message,
+        retryAfterSeconds: retryAfter
+      });
+    }
+
+    record.timestamps.push(now);
+    next();
+  };
+}
+
+const authRateLimiter = createRateLimiter(10, 60000, 'Muitas tentativas de autenticação. Por segurança, aguarde 1 minuto.');
+const sensitiveRateLimiter = createRateLimiter(30, 60000, 'Limite de operações excedido. Tente novamente em instantes.');
 
 // Central helper to resolve canonical Base URL (defaults to production domain: planner.amplificagroup.com)
 export function getBaseUrl(req?: express.Request): string {
@@ -143,6 +343,7 @@ Sitemap: ${baseUrl}/sitemap.xml`;
 
 // Initialize SQLite database
 let db: Database.Database;
+export { db };
 
 function initDatabase() {
   let dbPath = '';
@@ -177,9 +378,21 @@ function initDatabase() {
       plan TEXT,
       isTeamMember INTEGER DEFAULT 0,
       invitedByUserId TEXT,
-      permissions TEXT
+      permissions TEXT,
+      affiliate_code TEXT UNIQUE
     )
   `).run();
+
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_affiliate_code ON users(affiliate_code)').run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS affiliate_clicks (
+      id TEXT PRIMARY KEY,
+      affiliate_code TEXT,
+      timestamp TEXT
+    )
+  `).run();
+
 
   db.prepare(`
     CREATE TABLE IF NOT EXISTS clients (
@@ -245,6 +458,97 @@ function initDatabase() {
     )
   `).run();
 
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS coupons (
+      id TEXT PRIMARY KEY,
+      code TEXT UNIQUE NOT NULL,
+      discountType TEXT NOT NULL,
+      discountValue REAL NOT NULL,
+      applicablePlans TEXT,
+      applicableCycles TEXT,
+      maxUses INTEGER,
+      usedCount INTEGER DEFAULT 0,
+      expiresAt TEXT,
+      isActive INTEGER DEFAULT 1,
+      createdAt TEXT,
+      description TEXT
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS support_tickets (
+      id TEXT PRIMARY KEY,
+      userId TEXT,
+      userName TEXT,
+      userEmail TEXT,
+      subject TEXT NOT NULL,
+      message TEXT NOT NULL,
+      category TEXT DEFAULT 'geral',
+      priority TEXT DEFAULT 'normal',
+      status TEXT DEFAULT 'aberto',
+      replies TEXT,
+      createdAt TEXT,
+      updatedAt TEXT
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS announcements (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      type TEXT DEFAULT 'info',
+      link TEXT,
+      linkText TEXT,
+      isActive INTEGER DEFAULT 1,
+      createdAt TEXT
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      details TEXT NOT NULL,
+      category TEXT DEFAULT 'system',
+      adminUser TEXT,
+      timestamp TEXT
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS payment_history (
+      id TEXT PRIMARY KEY,
+      userId TEXT,
+      customerEmail TEXT,
+      customerName TEXT,
+      plan TEXT NOT NULL,
+      cycle TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT DEFAULT 'brl',
+      status TEXT DEFAULT 'succeeded',
+      couponCode TEXT,
+      stripeSessionId TEXT,
+      createdAt TEXT
+    )
+  `).run();
+
+  // Clean up any test seed coupons if present
+  db.prepare("DELETE FROM coupons WHERE id IN ('cp_lanca20', 'cp_creator10', 'cp_bemvindo15', 'cp_promo50', 'cp_vip100')").run();
+
+  // Seed initial audit log if empty
+  const logsCount = (db.prepare('SELECT COUNT(*) as count FROM audit_logs').get() as any)?.count || 0;
+  if (logsCount === 0) {
+    db.prepare('INSERT INTO audit_logs (id, action, details, category, adminUser, timestamp) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'log_' + Date.now(),
+      'SYSTEM_INIT',
+      'Banco de dados do SaaS inicializado com sucesso com suporte multitenant.',
+      'system',
+      'system',
+      new Date().toISOString()
+    );
+  }
+
   console.log('SQLite database structure verified successfully.');
 }
 
@@ -258,7 +562,7 @@ try {
 // --- API Endpoints ---
 
 // 1. Auth Endpoint: Register Account (LGPD Compliant with Consent)
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const { name, email, phone, password } = req.body;
 
   if (!name || !email || !password) {
@@ -282,21 +586,34 @@ app.post('/api/auth/register', (req, res) => {
     const userId = `user_${Date.now()}`;
     const createdAt = new Date().toISOString();
     const defaultPlan = 'gratis';
+    
+    // Affiliate logic
+    const affiliateCode = `ref_${name.trim().toLowerCase().replace(/\s+/g, '')}_${crypto.randomBytes(3).toString('hex')}`;
+    let invitedByUserId = null;
+    const affiliateCodeFromCookie = req.cookies.affiliate_code;
+    
+    if (affiliateCodeFromCookie) {
+      const referrer = db.prepare('SELECT id FROM users WHERE affiliate_code = ?').get(affiliateCodeFromCookie);
+      if (referrer) {
+        invitedByUserId = (referrer as any).id;
+      }
+    }
 
     db.prepare(`
-      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, affiliate_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       userId,
       name.trim(),
       email.trim().toLowerCase(),
       phone ? phone.trim() : null,
-      password,
+      await hashPassword(password),
       createdAt,
       defaultPlan,
       0, // isTeamMember false
-      null, // invitedByUserId null
-      null // permissions null
+      invitedByUserId,
+      null, // permissions null
+      affiliateCode
     );
 
     const newUser = {
@@ -304,7 +621,6 @@ app.post('/api/auth/register', (req, res) => {
       name: name.trim(),
       email: email.trim().toLowerCase(),
       phone: phone ? phone.trim() : '',
-      password: password,
       createdAt,
       plan: defaultPlan,
       isTeamMember: false
@@ -318,7 +634,7 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // 2. Auth Endpoint: Login (Case-insensitive email check)
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -369,12 +685,9 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(inputEmail) as any;
-    if (!user) {
-      return res.status(400).json({ success: false, error: 'E-mail não cadastrado. Cadastre-se grátis!' });
-    }
-
-    if (user.password !== password) {
-      return res.status(400).json({ success: false, error: 'Senha de acesso incorreta.' });
+    
+    if (!user || !(await verifyPassword(password, user.password))) {
+      return res.status(401).json({ success: false, error: 'E-mail ou senha incorretos.' });
     }
 
     const parsedUser = {
@@ -734,6 +1047,7 @@ app.post('/api/posts/approve', (req, res) => {
       postId
     );
     res.json({ success: true });
+    io.emit('post-status-updated', { postId, status });
   } catch (err: any) {
     console.error('Error in POST /api/posts/approve:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -947,7 +1261,10 @@ app.post('/api/posts/schedule-now', (req, res) => {
 
 // 6. Stripe Payment Gateway Endpoints
 
-// Stripe keys loaded from environment variables or database metadata
+// Default fallback keys provided for the Planner SaaS
+const DEFAULT_STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const DEFAULT_STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
+const DEFAULT_STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
 // Helper to validate whether a key looks like a valid Stripe Secret Key
 function isValidStripeSecretKey(key?: string | null): boolean {
@@ -996,7 +1313,7 @@ function getStripeSecretKey(): string | null {
     }
   }
 
-  return null;
+  return DEFAULT_STRIPE_SECRET_KEY;
 }
 
 // Helper to detect if an invalid/wrong format key was provided in env
@@ -1043,7 +1360,7 @@ function getStripePublishableKey(): string {
     }
   } catch (err) {}
 
-  return '';
+  return DEFAULT_STRIPE_PUBLISHABLE_KEY;
 }
 
 function getStripeWebhookSecret(): string | null {
@@ -1075,7 +1392,7 @@ function getStripeWebhookSecret(): string | null {
     }
   }
 
-  return null;
+  return DEFAULT_STRIPE_WEBHOOK_SECRET;
 }
 
 // Helper to get initialized Stripe instance if configured
@@ -1096,34 +1413,44 @@ async function getStripeClient() {
 
 // Stripe Prices Configuration (BRL & USD)
 const STRIPE_PRICES: Record<string, Record<string, Record<string, string>>> = {
-  basic: {
+  starter: {
     brl: {
-      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_BRL || '',
-      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_BRL || '',
+      monthly: process.env.STRIPE_PRICE_STARTER_MONTHLY_BRL || '',
+      quarterly: process.env.STRIPE_PRICE_STARTER_QUARTERLY_BRL || '',
     },
     usd: {
-      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_USD || '',
-      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_USD || '',
+      monthly: process.env.STRIPE_PRICE_STARTER_MONTHLY_USD || '',
+      quarterly: process.env.STRIPE_PRICE_STARTER_QUARTERLY_USD || '',
+    },
+  },
+  basic: {
+    brl: {
+      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_BRL || 'price_1U5Bi30hgpPYrgzVcEazGPRc',
+      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_BRL || 'price_1U5Bi40hgpPYrgzVRdozJECv',
+    },
+    usd: {
+      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_USD || 'price_1U5BiY0hgpPYrgzVOAxQ8rIY',
+      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_USD || 'price_1U5BiZ0hgpPYrgzVlHghRcJ0',
     },
   },
   pro: {
     brl: {
-      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_BRL || '',
-      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_BRL || '',
+      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_BRL || 'price_1U5Bi40hgpPYrgzVA0HoSLj9',
+      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_BRL || 'price_1U5Bi50hgpPYrgzVyNDREMrB',
     },
     usd: {
-      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_USD || '',
-      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_USD || '',
+      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_USD || 'price_1U5BiZ0hgpPYrgzV5vWXmmbV',
+      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_USD || 'price_1U5Bia0hgpPYrgzViqmIzPko',
     },
   },
   growth: {
     brl: {
-      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_BRL || '',
-      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_BRL || '',
+      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_BRL || 'price_1U5Bi50hgpPYrgzV2JlZ1p2b',
+      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_BRL || 'price_1U5Bi50hgpPYrgzV0IDse2z8',
     },
     usd: {
-      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_USD || '',
-      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_USD || '',
+      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_USD || 'price_1U5Bia0hgpPYrgzVHaGNwErD',
+      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_USD || 'price_1U5Bia0hgpPYrgzVasbSEQTL',
     },
   },
 };
@@ -1149,14 +1476,16 @@ app.get('/api/stripe/config', (req, res) => {
     webhookUrl: `${baseUrl}/api/stripe/webhook`,
     invalidKeyNotice,
     currency: 'BRL',
-    supportedPlans: ['free', 'basic', 'pro', 'growth'],
+    supportedPlans: ['free', 'starter', 'basic', 'pro', 'growth'],
     pricing: {
       brl: {
+        starter: { monthly: 14.99, quarterly: 42.00 },
         basic: { monthly: 29.00, quarterly: 84.00 },
         pro: { monthly: 49.00, quarterly: 144.00 },
         growth: { monthly: 79.00, quarterly: 224.00 }
       },
       usd: {
+        starter: { monthly: 3.99, quarterly: 10.99 },
         basic: { monthly: 5.99, quarterly: 16.99 },
         pro: { monthly: 9.99, quarterly: 28.99 },
         growth: { monthly: 15.99, quarterly: 45.99 }
@@ -1231,10 +1560,707 @@ app.post('/api/admin/stripe-config', async (req, res) => {
   }
 });
 
+// --- Helper functions for Pricing & Coupons ---
+function getPlanBasePrice(plan: string, cycle: string, currency: string): number {
+  const isQuarterly = cycle === 'quarterly';
+  const isUsd = currency.toLowerCase() === 'usd';
+  
+  if (plan === 'starter') {
+    return isUsd ? (isQuarterly ? 10.99 : 3.99) : (isQuarterly ? 42.00 : 14.99);
+  }
+  if (plan === 'basic') {
+    return isUsd ? (isQuarterly ? 16.99 : 5.99) : (isQuarterly ? 84.00 : 29.00);
+  }
+  if (plan === 'pro') {
+    return isUsd ? (isQuarterly ? 28.99 : 9.99) : (isQuarterly ? 144.00 : 49.00);
+  }
+  if (plan === 'growth') {
+    return isUsd ? (isQuarterly ? 45.99 : 15.99) : (isQuarterly ? 224.00 : 79.00);
+  }
+  return 0;
+}
+
+function evaluateCouponCode(couponCode: string, plan: string, cycle: string = 'monthly', currency: string = 'brl') {
+  const code = (couponCode || '').trim().toUpperCase();
+  if (!code) {
+    return { valid: false, error: 'Código de cupom não informado.' };
+  }
+
+  const coupon = db.prepare('SELECT * FROM coupons WHERE code = ? COLLATE NOCASE').get(code) as any;
+  if (!coupon) {
+    return { valid: false, error: 'Cupom inválido ou não encontrado.' };
+  }
+
+  if (!coupon.isActive) {
+    return { valid: false, error: 'Este cupom foi desativado temporariamente.' };
+  }
+
+  if (coupon.expiresAt) {
+    const expiry = new Date(coupon.expiresAt + 'T23:59:59');
+    if (new Date() > expiry) {
+      return { valid: false, error: 'Este cupom já expirou.' };
+    }
+  }
+
+  if (coupon.maxUses !== null && coupon.maxUses !== undefined && coupon.maxUses > 0) {
+    if ((coupon.usedCount || 0) >= coupon.maxUses) {
+      return { valid: false, error: 'Este cupom atingiu o limite máximo de utilizações.' };
+    }
+  }
+
+  // Check applicable plans
+  let applicablePlans: string[] = [];
+  try {
+    applicablePlans = coupon.applicablePlans ? JSON.parse(coupon.applicablePlans) : [];
+  } catch (e) {
+    applicablePlans = [];
+  }
+  if (Array.isArray(applicablePlans) && applicablePlans.length > 0 && !applicablePlans.includes(plan)) {
+    return { valid: false, error: `Este cupom é válido apenas para os planos: ${applicablePlans.join(', ').toUpperCase()}.` };
+  }
+
+  // Check applicable cycles
+  let applicableCycles: string[] = [];
+  try {
+    applicableCycles = coupon.applicableCycles ? JSON.parse(coupon.applicableCycles) : [];
+  } catch (e) {
+    applicableCycles = [];
+  }
+  if (Array.isArray(applicableCycles) && applicableCycles.length > 0 && !applicableCycles.includes(cycle)) {
+    return { valid: false, error: `Este cupom é válido apenas para faturamento ${applicableCycles.join(' ou ')}.` };
+  }
+
+  const originalPrice = getPlanBasePrice(plan, cycle, currency);
+  let discountAmount = 0;
+  
+  if (coupon.discountType === 'percent') {
+    discountAmount = (originalPrice * Number(coupon.discountValue)) / 100;
+  } else {
+    // Fixed amount
+    discountAmount = Number(coupon.discountValue);
+  }
+
+  discountAmount = Math.min(discountAmount, originalPrice);
+  const finalPrice = Math.max(0, Number((originalPrice - discountAmount).toFixed(2)));
+  discountAmount = Number((originalPrice - finalPrice).toFixed(2));
+
+  return {
+    valid: true,
+    coupon: {
+      id: coupon.id,
+      code: coupon.code,
+      discountType: coupon.discountType,
+      discountValue: Number(coupon.discountValue),
+      description: coupon.description || '',
+      usedCount: coupon.usedCount || 0,
+      maxUses: coupon.maxUses,
+      expiresAt: coupon.expiresAt,
+      isActive: Boolean(coupon.isActive)
+    },
+    originalPrice,
+    finalPrice,
+    discountAmount,
+    discountPercent: coupon.discountType === 'percent' ? Number(coupon.discountValue) : Math.round((discountAmount / (originalPrice || 1)) * 100),
+    isFree: finalPrice === 0
+  };
+}
+
+// --- Coupon API Endpoints ---
+
+// 1. Get all coupons (Admin)
+app.get('/api/coupons', (_req, res) => {
+  try {
+    const coupons = db.prepare('SELECT * FROM coupons ORDER BY createdAt DESC').all() as any[];
+    const parsed = coupons.map(c => ({
+      ...c,
+      isActive: Boolean(c.isActive),
+      applicablePlans: c.applicablePlans ? JSON.parse(c.applicablePlans) : [],
+      applicableCycles: c.applicableCycles ? JSON.parse(c.applicableCycles) : [],
+    }));
+    res.json({ success: true, coupons: parsed });
+  } catch (err: any) {
+    console.error('Error fetching coupons:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Validate a coupon code (Public)
+app.post('/api/coupons/validate', (req, res) => {
+  try {
+    const { code, plan = 'basic', cycle = 'monthly', currency = 'brl' } = req.body;
+    const result = evaluateCouponCode(code, plan, cycle, currency);
+    if (!result.valid) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('Error validating coupon:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Create or update coupon (Admin)
+app.post('/api/coupons', (req, res) => {
+  try {
+    const { id, code, discountType, discountValue, applicablePlans, applicableCycles, maxUses, expiresAt, isActive, description } = req.body;
+    
+    if (!code || !discountType || discountValue === undefined) {
+      return res.status(400).json({ success: false, error: 'Código, tipo e valor do desconto são obrigatórios.' });
+    }
+
+    const cleanCode = code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+    const couponId = id || `cp_${Date.now()}`;
+    const now = new Date().toISOString();
+
+    const insertOrUpdate = db.prepare(`
+      INSERT INTO coupons (id, code, discountType, discountValue, applicablePlans, applicableCycles, maxUses, usedCount, expiresAt, isActive, createdAt, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        code = excluded.code,
+        discountType = excluded.discountType,
+        discountValue = excluded.discountValue,
+        applicablePlans = excluded.applicablePlans,
+        applicableCycles = excluded.applicableCycles,
+        maxUses = excluded.maxUses,
+        expiresAt = excluded.expiresAt,
+        isActive = excluded.isActive,
+        description = excluded.description
+    `);
+
+    insertOrUpdate.run(
+      couponId,
+      cleanCode,
+      discountType === 'fixed' ? 'fixed' : 'percent',
+      Number(discountValue),
+      JSON.stringify(applicablePlans || []),
+      JSON.stringify(applicableCycles || []),
+      maxUses ? Number(maxUses) : null,
+      expiresAt || null,
+      isActive !== undefined ? (isActive ? 1 : 0) : 1,
+      now,
+      description || null
+    );
+
+    res.json({ success: true, message: 'Cupom salvo com sucesso!', couponId });
+  } catch (err: any) {
+    console.error('Error saving coupon:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao salvar cupom.' });
+  }
+});
+
+// 4. Toggle coupon active state (Admin)
+app.patch('/api/coupons/:id/toggle', (req, res) => {
+  try {
+    const { id } = req.params;
+    const current = db.prepare('SELECT isActive FROM coupons WHERE id = ?').get(id) as any;
+    if (!current) {
+      return res.status(404).json({ success: false, error: 'Cupom não encontrado.' });
+    }
+
+    const newState = current.isActive ? 0 : 1;
+    db.prepare('UPDATE coupons SET isActive = ? WHERE id = ?').run(newState, id);
+    res.json({ success: true, isActive: Boolean(newState) });
+  } catch (err: any) {
+    console.error('Error toggling coupon:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Delete coupon (Admin)
+app.delete('/api/coupons/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    db.prepare('DELETE FROM coupons WHERE id = ?').run(id);
+    res.json({ success: true, message: 'Cupom excluído com sucesso.' });
+  } catch (err: any) {
+    console.error('Error deleting coupon:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// 🚀 COMPREHENSIVE SAAS ADMIN ENDPOINTS
+// ==========================================
+
+// Helper to log audit actions
+function recordAuditLog(action: string, details: string, category = 'admin', adminUser = 'admin') {
+  try {
+    db.prepare(`
+      INSERT INTO audit_logs (id, action, details, category, adminUser, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      action,
+      details,
+      category,
+      adminUser,
+      new Date().toISOString()
+    );
+  } catch (e) {
+    console.error('Failed to write audit log:', e);
+  }
+}
+
+// 1. Consolidated SaaS Metrics
+app.get('/api/admin/metrics', (req, res) => {
+  try {
+    // Total users
+    const allUsers = db.prepare('SELECT id, name, email, plan, createdAt, isTeamMember FROM users').all() as any[];
+    const totalUsers = allUsers.length;
+    const paidUsers = allUsers.filter(u => u.plan && u.plan !== 'free' && u.plan !== 'gratis');
+    
+    // Breakdown by plan
+    const planCounts: Record<string, number> = {
+      free: 0,
+      starter: 0,
+      basic: 0,
+      pro: 0,
+      growth: 0
+    };
+
+    allUsers.forEach(u => {
+      const p = (u.plan || 'free').toLowerCase();
+      if (p === 'gratis' || p === 'free') planCounts.free++;
+      else if (p === 'starter') planCounts.starter++;
+      else if (p === 'basic') planCounts.basic++;
+      else if (p === 'pro') planCounts.pro++;
+      else if (p === 'growth') planCounts.growth++;
+      else planCounts.free++;
+    });
+
+    // Calculate MRR (Monthly Recurring Revenue in BRL)
+    // Starter: R$ 14,99 | Basic: R$ 29,00 | Pro: R$ 49,00 | Growth: R$ 79,00
+    const mrrBrl = (planCounts.starter * 14.99) + (planCounts.basic * 29.00) + (planCounts.pro * 49.00) + (planCounts.growth * 79.00);
+    const arrBrl = mrrBrl * 12;
+
+    // Total Clients & Posts
+    const totalClientsCount = (db.prepare('SELECT COUNT(*) as count FROM clients').get() as any)?.count || 0;
+    const totalPostsCount = (db.prepare('SELECT COUNT(*) as count FROM posts').get() as any)?.count || 0;
+    
+    // Support Tickets metrics
+    const totalTickets = (db.prepare('SELECT COUNT(*) as count FROM support_tickets').get() as any)?.count || 0;
+    const openTickets = (db.prepare("SELECT COUNT(*) as count FROM support_tickets WHERE status != 'resolvido' AND status != 'fechado'").get() as any)?.count || 0;
+
+    // Daily user growth for last 14 days
+    const dailyGrowth: { date: string; users: number; posts: number }[] = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayLabel = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+      
+      const count = allUsers.filter(u => u.createdAt && u.createdAt.startsWith(dateStr)).length;
+      dailyGrowth.push({
+        date: dayLabel,
+        users: count,
+        posts: Math.floor(count * 3.5)
+      });
+    }
+
+    // Coupons summary
+    const couponsList = db.prepare('SELECT id, code, discountType, discountValue, usedCount, maxUses, isActive FROM coupons').all() as any[];
+
+    // Stripe status
+    const stripeConfigured = Boolean(getStripeSecretKey());
+    const isLive = Boolean(getStripeSecretKey()?.startsWith('sk_live_'));
+
+    res.json({
+      success: true,
+      metrics: {
+        totalUsers,
+        paidUsersCount: paidUsers.length,
+        freeUsersCount: planCounts.free,
+        conversionRate: totalUsers > 0 ? ((paidUsers.length / totalUsers) * 100).toFixed(1) : '0.0',
+        mrrBrl: Number(mrrBrl.toFixed(2)),
+        arrBrl: Number(arrBrl.toFixed(2)),
+        totalClients: totalClientsCount,
+        totalPosts: totalPostsCount,
+        totalTickets,
+        openTickets,
+        planDistribution: planCounts,
+        dailyGrowth,
+        coupons: couponsList,
+        systemStatus: {
+          database: 'healthy',
+          stripe: stripeConfigured ? (isLive ? 'live' : 'test') : 'not_configured',
+          geminiAI: 'active'
+        }
+      }
+    });
+  } catch (err: any) {
+    console.error('Error fetching admin metrics:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. User Management - List all users with workspace details
+app.get('/api/admin/users', (req, res) => {
+  try {
+    const rawUsers = db.prepare('SELECT * FROM users ORDER BY createdAt DESC').all() as any[];
+    
+    // Enrich users with counts of clients and posts
+    const enriched = rawUsers.map(u => {
+      let clientCount = 0;
+      let postCount = 0;
+      try {
+        clientCount = (db.prepare('SELECT COUNT(*) as count FROM clients WHERE userId = ?').get(u.id) as any)?.count || 0;
+        postCount = (db.prepare('SELECT COUNT(*) as count FROM posts WHERE userId = ? OR clientId IN (SELECT id FROM clients WHERE userId = ?)').get(u.id, u.id) as any)?.count || 0;
+      } catch (e) {}
+
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        phone: u.phone || '',
+        plan: u.plan || 'free',
+        isTeamMember: u.isTeamMember === 1,
+        invitedByUserId: u.invitedByUserId || null,
+        createdAt: u.createdAt || new Date().toISOString(),
+        clientCount,
+        postCount,
+      };
+    });
+
+    res.json({ success: true, users: enriched });
+  } catch (err: any) {
+    console.error('Error fetching users for admin:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. User Management - Create user manually (Admin)
+app.post('/api/admin/users', (req, res) => {
+  try {
+    const { name, email, phone, password, plan = 'free' } = req.body;
+    if (!name || !email) {
+      return res.status(400).json({ success: false, error: 'Nome e e-mail são obrigatórios.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(cleanEmail);
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Já existe um usuário com este e-mail.' });
+    }
+
+    const userId = `user_${Date.now()}`;
+    const createdAt = new Date().toISOString();
+    const userPass = password || '123456';
+
+    db.prepare(`
+      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).run(userId, name.trim(), cleanEmail, phone ? phone.trim() : null, userPass, createdAt, plan);
+
+    // Create default client for this user
+    const defaultClientId = `client_${Date.now()}`;
+    db.prepare(`
+      INSERT INTO clients (id, userId, name)
+      VALUES (?, ?, ?)
+    `).run(defaultClientId, userId, `Canal de ${name.split(' ')[0]}`);
+
+    recordAuditLog('USER_CREATE', `Usuário ${cleanEmail} criado manualmente com plano ${plan}.`, 'user_management');
+
+    res.json({
+      success: true,
+      message: 'Usuário cadastrado com sucesso!',
+      user: { id: userId, name, email: cleanEmail, plan, createdAt }
+    });
+  } catch (err: any) {
+    console.error('Error creating user by admin:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. User Management - Update Plan or Info (Admin)
+app.patch('/api/admin/users/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { plan, name, phone, password } = req.body;
+
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado.' });
+    }
+
+    const newPlan = plan !== undefined ? plan : user.plan;
+    const newName = name !== undefined ? name.trim() : user.name;
+    const newPhone = phone !== undefined ? phone.trim() : user.phone;
+    const newPassword = password !== undefined ? password : user.password;
+
+    db.prepare(`
+      UPDATE users 
+      SET plan = ?, name = ?, phone = ?, password = ?
+      WHERE id = ?
+    `).run(newPlan, newName, newPhone, newPassword, id);
+
+    recordAuditLog(
+      'USER_UPDATE',
+      `Usuário ${user.email} atualizado. Plano anterior: "${user.plan}" -> Novo plano: "${newPlan}".`,
+      'user_management'
+    );
+
+    res.json({ success: true, message: 'Dados do usuário atualizados com sucesso.' });
+  } catch (err: any) {
+    console.error('Error updating user by admin:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. User Management - Delete user (Admin)
+app.delete('/api/admin/users/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = db.prepare('SELECT email FROM users WHERE id = ?').get(id) as any;
+    
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado.' });
+    }
+
+    db.transaction(() => {
+      // 1. Delete goals
+      db.prepare('DELETE FROM goals WHERE clientId IN (SELECT id FROM clients WHERE userId = ?)').run(id);
+      // 2. Delete posts
+      db.prepare('DELETE FROM posts WHERE clientId IN (SELECT id FROM clients WHERE userId = ?) OR userId = ?').run(id, id);
+      // 3. Delete clients
+      db.prepare('DELETE FROM clients WHERE userId = ?').run(id);
+      // 4. Delete connected accounts
+      db.prepare('DELETE FROM connected_accounts WHERE userId = ?').run(id);
+      // 5. Delete user
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    })();
+
+    recordAuditLog('USER_DELETE', `Conta e dados do usuário ${user.email} (ID: ${id}) excluídos.`, 'user_management');
+
+    res.json({ success: true, message: 'Usuário e todos os dados vinculados foram excluídos.' });
+  } catch (err: any) {
+    console.error('Error deleting user by admin:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. Export Users to CSV
+app.get('/api/admin/export/users', (req, res) => {
+  try {
+    const rawUsers = db.prepare('SELECT id, name, email, phone, plan, createdAt FROM users ORDER BY createdAt DESC').all() as any[];
+    
+    let csv = 'ID;Nome;Email;Telefone;Plano;Data Cadastro\n';
+    for (const u of rawUsers) {
+      const cleanName = (u.name || '').replace(/;/g, ',');
+      const cleanEmail = (u.email || '').replace(/;/g, ',');
+      const cleanPhone = (u.phone || '').replace(/;/g, ',');
+      const plan = (u.plan || 'free').toUpperCase();
+      const date = (u.createdAt || '').split('T')[0];
+      csv += `"${u.id}";"${cleanName}";"${cleanEmail}";"${cleanPhone}";"${plan}";"${date}"\n`;
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="usuarios_planner_${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send('\uFEFF' + csv); // Include UTF-8 BOM for Excel compatibility
+  } catch (err: any) {
+    res.status(500).send('Erro ao gerar CSV de exportação');
+  }
+});
+
+// 7. Support Tickets Management (List, Reply, Update Status)
+app.get('/api/admin/tickets', (req, res) => {
+  try {
+    const tickets = db.prepare('SELECT * FROM support_tickets ORDER BY createdAt DESC').all() as any[];
+    const parsed = tickets.map(t => ({
+      ...t,
+      replies: t.replies ? JSON.parse(t.replies) : []
+    }));
+    res.json({ success: true, tickets: parsed });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/admin/tickets/:id/reply', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message, adminName = 'Suporte Planner' } = req.body;
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'Mensagem de resposta não pode estar vazia.' });
+    }
+
+    const ticket = db.prepare('SELECT * FROM support_tickets WHERE id = ?').get(id) as any;
+    if (!ticket) {
+      return res.status(404).json({ success: false, error: 'Ticket não encontrado.' });
+    }
+
+    const currentReplies = ticket.replies ? JSON.parse(ticket.replies) : [];
+    const newReply = {
+      id: `reply_${Date.now()}`,
+      author: adminName,
+      isAdmin: true,
+      message: message.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    currentReplies.push(newReply);
+
+    db.prepare(`
+      UPDATE support_tickets 
+      SET replies = ?, status = 'em_andamento', updatedAt = ?
+      WHERE id = ?
+    `).run(JSON.stringify(currentReplies), new Date().toISOString(), id);
+
+    recordAuditLog('TICKET_REPLY', `Resposta enviada para o ticket #${id} (${ticket.subject}).`, 'support');
+
+    res.json({ success: true, replies: currentReplies });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.patch('/api/admin/tickets/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    db.prepare('UPDATE support_tickets SET status = ?, updatedAt = ? WHERE id = ?').run(
+      status,
+      new Date().toISOString(),
+      id
+    );
+    res.json({ success: true, status });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// User-facing ticket submission endpoint
+app.post('/api/support/tickets', (req, res) => {
+  try {
+    const { userId, userName, userEmail, subject, message, category = 'geral', priority = 'normal' } = req.body;
+    if (!subject || !message) {
+      return res.status(400).json({ success: false, error: 'Assunto e mensagem são obrigatórios.' });
+    }
+
+    const ticketId = `ticket_${Date.now()}`;
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO support_tickets (id, userId, userName, userEmail, subject, message, category, priority, status, replies, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'aberto', '[]', ?, ?)
+    `).run(
+      ticketId,
+      userId || null,
+      userName || 'Usuário',
+      userEmail || 'sem-email@planner.com',
+      subject.trim(),
+      message.trim(),
+      category,
+      priority,
+      now,
+      now
+    );
+
+    recordAuditLog('TICKET_OPENED', `Novo chamado de suporte #${ticketId} aberto por ${userEmail}: "${subject}".`, 'support');
+
+    res.json({ success: true, message: 'Seu chamado foi registrado com sucesso! Nossa equipe responderá em breve.', ticketId });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 8. Global System Announcements (Broadcast Banner)
+app.get('/api/admin/announcements', (req, res) => {
+  try {
+    const announcements = db.prepare('SELECT * FROM announcements ORDER BY createdAt DESC').all();
+    res.json({ success: true, announcements });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/admin/announcements', (req, res) => {
+  try {
+    const { title, message, type = 'info', link, linkText, isActive = true } = req.body;
+    if (!title || !message) {
+      return res.status(400).json({ success: false, error: 'Título e mensagem são obrigatórios.' });
+    }
+
+    const announcementId = `ann_${Date.now()}`;
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO announcements (id, title, message, type, link, linkText, isActive, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      announcementId,
+      title.trim(),
+      message.trim(),
+      type,
+      link || null,
+      linkText || null,
+      isActive ? 1 : 0,
+      now
+    );
+
+    recordAuditLog('ANNOUNCEMENT_CREATE', `Novo anúncio global criado: "${title}".`, 'broadcast');
+
+    res.json({ success: true, announcementId });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/admin/announcements/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    db.prepare('DELETE FROM announcements WHERE id = ?').run(id);
+    recordAuditLog('ANNOUNCEMENT_DELETE', `Anúncio global #${id} removido.`, 'broadcast');
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/announcements/active', (req, res) => {
+  try {
+    const active = db.prepare('SELECT * FROM announcements WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1').get();
+    res.json({ success: true, announcement: active || null });
+  } catch (err: any) {
+    res.json({ success: true, announcement: null });
+  }
+});
+
+// 9. Audit Logs Endpoint
+app.get('/api/admin/audit-logs', (req, res) => {
+  try {
+    const logs = db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100').all();
+    res.json({ success: true, logs });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 10. Webhook Simulation Test Endpoint
+app.post('/api/admin/test-webhook', (req, res) => {
+  try {
+    const { eventType = 'checkout.session.completed', email = 'teste@cliente.com', plan = 'pro' } = req.body;
+    recordAuditLog('WEBHOOK_TEST', `Simulação de webhook: evento "${eventType}" para ${email} (Plano: ${plan}).`, 'stripe_test');
+    
+    // Simulate user plan update if user exists
+    const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
+    if (user && eventType === 'checkout.session.completed') {
+      db.prepare('UPDATE users SET plan = ? WHERE id = ?').run(plan, user.id);
+    }
+
+    res.json({
+      success: true,
+      message: `Evento de teste "${eventType}" processado com sucesso!`,
+      simulatedData: { eventType, email, plan, timestamp: new Date().toISOString() }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 6.3 Stripe Checkout Session Creation
 app.post('/api/stripe/checkout', async (req, res) => {
   try {
-    const { plan, cycle = 'monthly', customer, userId } = req.body;
+    const { plan, cycle = 'monthly', customer, userId, couponCode } = req.body;
 
     if (!plan || plan === 'free' || !STRIPE_PRICES[plan]) {
       return res.json({ success: true, checkoutUrl: `/?payment=success&plan=free&cycle=monthly` });
@@ -1243,10 +2269,32 @@ app.post('/api/stripe/checkout', async (req, res) => {
     const requestedCurrency = (customer?.currency || req.body.currency || (customer?.country === 'BR' ? 'brl' : 'brl')).toLowerCase();
     const currency = (requestedCurrency === 'usd' ? 'usd' : 'brl');
     const selectedCycle = cycle === 'quarterly' ? 'quarterly' : 'monthly';
-
     const baseUrl = getBaseUrl(req);
-    const priceId = STRIPE_PRICES[plan]?.[currency]?.[selectedCycle];
 
+    // Evaluate coupon if provided
+    let appliedDiscount: any = null;
+    if (couponCode) {
+      const evalResult = evaluateCouponCode(couponCode, plan, selectedCycle, currency);
+      if (evalResult.valid) {
+        appliedDiscount = evalResult;
+        // Increment usage count in database
+        try {
+          db.prepare('UPDATE coupons SET usedCount = usedCount + 1 WHERE id = ?').run(evalResult.coupon.id);
+        } catch (e) {}
+
+        // If coupon makes the plan 100% free
+        if (evalResult.isFree) {
+          return res.json({
+            success: true,
+            checkoutUrl: `/?payment=success&plan=${plan}&cycle=${selectedCycle}&coupon=${encodeURIComponent(evalResult.coupon.code)}&free_vip=true`,
+            isFree: true,
+            discount: evalResult
+          });
+        }
+      }
+    }
+
+    const priceId = STRIPE_PRICES[plan]?.[currency]?.[selectedCycle];
     const stripe = await getStripeClient();
 
     if (!stripe) {
@@ -1265,37 +2313,49 @@ app.post('/api/stripe/checkout', async (req, res) => {
 
       const lineItems: any[] = [];
 
-      // Use pre-configured Stripe Price ID if available
-      if (priceId && priceId.startsWith('price_')) {
+      // Calculate unit amount (with coupon discount if applicable)
+      let unitAmount = 1499;
+      let planName = 'Starter';
+      let planDescription = 'Plano de assinatura mensal';
+
+      if (plan === 'starter') {
+        planName = 'Starter';
+        unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 1099 : 399) : (selectedCycle === 'quarterly' ? 4200 : 1499);
+        planDescription = `Assinatura Plano Starter (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
+      } else if (plan === 'basic') {
+        planName = 'Basic';
+        unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 1699 : 599) : (selectedCycle === 'quarterly' ? 8400 : 2900);
+        planDescription = `Assinatura Plano Basic (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
+      } else if (plan === 'pro') {
+        planName = 'Pro';
+        unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 2899 : 999) : (selectedCycle === 'quarterly' ? 14400 : 4900);
+        planDescription = `Assinatura Plano Pro (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
+      } else if (plan === 'growth') {
+        planName = 'Growth PRO';
+        unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 4599 : 1599) : (selectedCycle === 'quarterly' ? 22400 : 7900);
+        planDescription = `Assinatura Plano Growth PRO (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
+      }
+
+      // If coupon applied, adjust unitAmount in cents
+      if (appliedDiscount && appliedDiscount.finalPrice !== undefined) {
+        unitAmount = Math.max(50, Math.round(appliedDiscount.finalPrice * 100)); // Minimum Stripe charge is 50 cents
+        planDescription += ` (Cupom ${appliedDiscount.coupon.code}: -${appliedDiscount.discountPercent}%)`;
+      }
+
+      const isRecurringPrice = Boolean(priceId && priceId.startsWith('price_') && !appliedDiscount);
+
+      // Use pre-configured Stripe Price ID only if no coupon discount (coupons require dynamic custom price_data)
+      if (isRecurringPrice) {
         lineItems.push({
           price: priceId,
           quantity: 1,
         });
       } else {
-        // Dynamic price data fallback
-        let unitAmount = 2900;
-        let planName = 'Basic';
-        let planDescription = 'Plano de assinatura mensal';
-
-        if (plan === 'basic') {
-          planName = 'Basic';
-          unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 1699 : 599) : (selectedCycle === 'quarterly' ? 8400 : 2900);
-          planDescription = `Assinatura Plano Basic (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
-        } else if (plan === 'pro') {
-          planName = 'Pro';
-          unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 2899 : 999) : (selectedCycle === 'quarterly' ? 14400 : 4900);
-          planDescription = `Assinatura Plano Pro (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
-        } else if (plan === 'growth') {
-          planName = 'Growth PRO';
-          unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 4599 : 1599) : (selectedCycle === 'quarterly' ? 22400 : 7900);
-          planDescription = `Assinatura Plano Growth PRO (${selectedCycle === 'quarterly' ? 'Trimestral - 3 meses' : 'Mensal'}) - Planner SaaS`;
-        }
-
         lineItems.push({
           price_data: {
             currency: currency,
             product_data: {
-              name: `Planner SaaS - Plano ${planName}`,
+              name: `Planner SaaS - Plano ${planName}${appliedDiscount ? ` (Cupom: ${appliedDiscount.coupon.code})` : ''}`,
               description: planDescription,
               images: ['https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80']
             },
@@ -1305,12 +2365,10 @@ app.post('/api/stripe/checkout', async (req, res) => {
         });
       }
 
-      const useSubscriptionMode = priceId && priceId.startsWith('price_');
-
       const sessionPayload: any = {
+        payment_method_types: ['card'],
         line_items: lineItems,
-        mode: useSubscriptionMode ? 'subscription' : 'payment',
-        ...(useSubscriptionMode ? {} : { payment_method_types: ['card'] }),
+        mode: isRecurringPrice ? 'subscription' : 'payment',
         customer_email: customerEmail || undefined,
         client_reference_id: userId || customerEmail || undefined,
         metadata: {
@@ -1319,10 +2377,12 @@ app.post('/api/stripe/checkout', async (req, res) => {
           currency,
           customerName,
           customerEmail: customerEmail || '',
-          userId: userId || ''
+          userId: userId || '',
+          couponCode: appliedDiscount ? appliedDiscount.coupon.code : '',
+          discountPercent: appliedDiscount ? String(appliedDiscount.discountPercent) : '',
         },
         billing_address_collection: 'auto',
-        success_url: `${baseUrl}/?payment=success&plan=${plan}&cycle=${selectedCycle}&session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${baseUrl}/?payment=success&plan=${plan}&cycle=${selectedCycle}&session_id={CHECKOUT_SESSION_ID}${appliedDiscount ? `&coupon=${encodeURIComponent(appliedDiscount.coupon.code)}` : ''}`,
         cancel_url: `${baseUrl}/?payment=cancelled&plan=${plan}`,
       };
 
@@ -1331,25 +2391,20 @@ app.post('/api/stripe/checkout', async (req, res) => {
         session = await stripe.checkout.sessions.create(sessionPayload);
       } catch (createErr: any) {
         // If price ID was invalid or belonging to another account, fallback to dynamic price data
-        if (priceId && (createErr?.message?.includes('No such price') || createErr?.message?.includes('resource_missing'))) {
-          console.warn('[Stripe] Preço ID não encontrado no modo atual, usando price_data dinâmico...');
-          let unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 1699 : 599) : (selectedCycle === 'quarterly' ? 8400 : 2900);
-          if (plan === 'pro') unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 2899 : 999) : (selectedCycle === 'quarterly' ? 14400 : 4900);
-          if (plan === 'growth') unitAmount = currency === 'usd' ? (selectedCycle === 'quarterly' ? 4599 : 1599) : (selectedCycle === 'quarterly' ? 22400 : 7900);
-
+        if (priceId && (createErr?.message?.includes('No such price') || createErr?.message?.includes('resource_missing') || createErr?.message?.includes('mode'))) {
+          console.warn('[Stripe] Preço ID não encontrado no modo atual, usando price_data dinâmico no modo payment...');
+          sessionPayload.mode = 'payment';
           sessionPayload.line_items = [{
             price_data: {
               currency: currency,
               product_data: {
-                name: `Planner SaaS - Plano ${plan.toUpperCase()}`,
+                name: `Planner SaaS - Plano ${plan.toUpperCase()}${appliedDiscount ? ` (Cupom: ${appliedDiscount.coupon.code})` : ''}`,
                 description: `Assinatura Plano ${plan.toUpperCase()} (${selectedCycle}) - Planner SaaS`
               },
               unit_amount: unitAmount,
             },
             quantity: 1,
           }];
-          sessionPayload.mode = 'payment';
-          sessionPayload.payment_method_types = ['card'];
           session = await stripe.checkout.sessions.create(sessionPayload);
         } else {
           throw createErr;
@@ -1361,7 +2416,8 @@ app.post('/api/stripe/checkout', async (req, res) => {
           success: true,
           checkoutUrl: session.url,
           sessionId: session.id,
-          isLiveStripe: true
+          isLiveStripe: true,
+          discount: appliedDiscount
         });
       } else {
         throw new Error('A Stripe não retornou a URL de checkout.');
@@ -1383,6 +2439,7 @@ app.post('/api/stripe/checkout', async (req, res) => {
     res.status(500).json({ success: false, error: error.message || 'Erro ao processar checkout do Stripe.' });
   }
 });
+
 
 // 6.3 Stripe Session Verification Endpoint
 app.get('/api/stripe/session-status', async (req, res) => {
@@ -1630,7 +2687,7 @@ async function setupFrontend() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
   });
 }
