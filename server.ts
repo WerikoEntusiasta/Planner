@@ -1305,10 +1305,12 @@ app.post('/api/stripe/checkout', async (req, res) => {
         });
       }
 
+      const useSubscriptionMode = priceId && priceId.startsWith('price_');
+
       const sessionPayload: any = {
-        payment_method_types: ['card'],
         line_items: lineItems,
-        mode: 'payment',
+        mode: useSubscriptionMode ? 'subscription' : 'payment',
+        ...(useSubscriptionMode ? {} : { payment_method_types: ['card'] }),
         customer_email: customerEmail || undefined,
         client_reference_id: userId || customerEmail || undefined,
         metadata: {
@@ -1346,6 +1348,8 @@ app.post('/api/stripe/checkout', async (req, res) => {
             },
             quantity: 1,
           }];
+          sessionPayload.mode = 'payment';
+          sessionPayload.payment_method_types = ['card'];
           session = await stripe.checkout.sessions.create(sessionPayload);
         } else {
           throw createErr;
