@@ -1261,11 +1261,6 @@ app.post('/api/posts/schedule-now', (req, res) => {
 
 // 6. Stripe Payment Gateway Endpoints
 
-// Default fallback keys provided for the Planner SaaS
-const DEFAULT_STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
-const DEFAULT_STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
-const DEFAULT_STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
-
 // Helper to validate whether a key looks like a valid Stripe Secret Key
 function isValidStripeSecretKey(key?: string | null): boolean {
   if (!key) return false;
@@ -1313,7 +1308,7 @@ function getStripeSecretKey(): string | null {
     }
   }
 
-  return DEFAULT_STRIPE_SECRET_KEY;
+  return null;
 }
 
 // Helper to detect if an invalid/wrong format key was provided in env
@@ -1360,7 +1355,7 @@ function getStripePublishableKey(): string {
     }
   } catch (err) {}
 
-  return DEFAULT_STRIPE_PUBLISHABLE_KEY;
+  return "";
 }
 
 function getStripeWebhookSecret(): string | null {
@@ -1392,7 +1387,7 @@ function getStripeWebhookSecret(): string | null {
     }
   }
 
-  return DEFAULT_STRIPE_WEBHOOK_SECRET;
+  return null;
 }
 
 // Helper to get initialized Stripe instance if configured

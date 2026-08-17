@@ -28,7 +28,7 @@ interface TeamModalProps {
   onClose: () => void;
   currentUser: User;
   users: User[];
-  onUpdateUserPlan: (plan: 'free' | 'basic' | 'pro' | 'growth', billingCycle?: 'monthly' | 'quarterly') => void;
+  onUpdateUserPlan: (plan: 'free' | 'starter' | 'basic' | 'pro' | 'growth', billingCycle?: 'monthly' | 'quarterly') => void;
   onUpdateMemberPermissions: (userId: string, permissions: NonNullable<User['permissions']>) => void;
   onRemoveMember: (userId: string) => void;
 }
@@ -65,7 +65,7 @@ export default function TeamModal({
 
   // Plan limit calculations
   const hostPlan = hostUser.plan || 'free';
-  const maxAllowedMembers = hostPlan === 'growth' ? 10 : hostPlan === 'pro' ? 5 : hostPlan === 'basic' ? 3 : 0;
+  const maxAllowedMembers = hostPlan === 'growth' ? 8 : hostPlan === 'pro' ? 5 : hostPlan === 'basic' ? 3 : hostPlan === 'starter' ? 2 : 1;
   const isLimitReached = teamMembers.length >= maxAllowedMembers;
 
   // Generate invite link with custom embedded permissions
@@ -323,6 +323,33 @@ export default function TeamModal({
                   <div className="space-y-2.5 pt-1">
                     <p className="text-[11px] font-bold text-zinc-400 uppercase font-mono tracking-wider">{t('changePlanOrBilling', 'Alterar Plano ou Faturamento:')}</p>
                     <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => onUpdateUserPlan('starter', 'monthly')}
+                        className={`p-2.5 rounded-xl border text-[11px] font-semibold text-left transition-all cursor-pointer ${
+                          hostUser.plan === 'starter' && hostUser.billingCycle === 'monthly'
+                            ? 'bg-blue-500/20 border-blue-500/50 text-white'
+                            : 'bg-zinc-900/60 border-panel-border/40 text-zinc-300 hover:bg-zinc-900 hover:text-white'
+                        }`}
+                      >
+                        <p className="font-bold">Starter {t('monthly', 'Mensal')}</p>
+                        <p className="text-[9px] text-zinc-400 mt-0.5">R$ 14,99/{t('monthShort', 'mês')}</p>
+                      </button>
+
+                      <button
+                        onClick={() => onUpdateUserPlan('starter', 'quarterly')}
+                        className={`p-2.5 rounded-xl border text-[11px] font-semibold text-left transition-all cursor-pointer ${
+                          hostUser.plan === 'starter' && hostUser.billingCycle === 'quarterly'
+                            ? 'bg-blue-500/20 border-blue-500/50 text-white'
+                            : 'bg-zinc-900/60 border-panel-border/40 text-zinc-300 hover:bg-zinc-900 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="font-bold">Starter 3 {t('months', 'Meses')}</p>
+                          <span className="text-[7px] bg-accent-orange text-black font-black px-1 rounded uppercase tracking-wider">10% Off</span>
+                        </div>
+                        <p className="text-[9px] text-zinc-400 mt-0.5">R$ 42,00/{t('cycle', 'ciclo')}</p>
+                      </button>
+
                       <button
                         onClick={() => onUpdateUserPlan('basic', 'monthly')}
                         className={`p-2.5 rounded-xl border text-[11px] font-semibold text-left transition-all cursor-pointer ${

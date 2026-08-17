@@ -10,10 +10,18 @@ interface SidebarProps {
   onAddQuickPost: (platform: Platform, format: any, titleStr: string) => void;
   onAddGoal: (title: string, platform: Platform) => void;
   onCreatePostFromAI?: (idea: Partial<Post> | Partial<Post>[]) => void;
+  userPlan?: string;
+  isTeamMember?: boolean;
+  userId?: string;
+  onOpenPricing?: () => void;
 }
 
 export default function Sidebar({
-  onCreatePostFromAI
+  onCreatePostFromAI,
+  userPlan,
+  isTeamMember,
+  userId,
+  onOpenPricing,
 }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -49,7 +57,13 @@ export default function Sidebar({
         <div className="relative flex-1 flex flex-col h-full space-y-6">
           <div className="absolute -inset-0.5 bg-gradient-to-r from-accent-purple via-accent-orange to-accent-purple rounded-2xl blur opacity-30 animate-pulse pointer-events-none" />
           <div className="relative flex-1 flex flex-col h-full">
-            <IAChatSuggester onCreatePostFromAI={onCreatePostFromAI} />
+            <IAChatSuggester
+              onCreatePostFromAI={onCreatePostFromAI}
+              userPlan={userPlan}
+              isTeamMember={isTeamMember}
+              userId={userId}
+              onOpenPricing={onOpenPricing}
+            />
           </div>
         </div>
       )}

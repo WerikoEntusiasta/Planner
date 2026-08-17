@@ -3,12 +3,19 @@ import { X, Sparkles, Layout, Download, Copy, Check, Sliders, Smartphone, Monito
 import JSZip from 'jszip';
 import html2canvas from 'html2canvas';
 import { Post, Platform, ContentFormat } from '../types';
+import AIQuotaBadge from './AIQuotaBadge';
+import AILimitModal from './AILimitModal';
+import { checkAIQuota, consumeAIQuota, AIQuotaStatus } from '../services/aiUsageService';
 
 interface CarouselAICreatorModalProps {
   isOpen?: boolean;
   onClose?: () => void;
   onCreatePost?: (postData: Partial<Post>) => void;
   isPageView?: boolean;
+  userPlan?: string;
+  isTeamMember?: boolean;
+  userId?: string;
+  onOpenPricing?: () => void;
 }
 
 interface SlideItem {
@@ -51,8 +58,17 @@ const rgbToHex = (r: number, g: number, b: number) => {
   }).join('').toUpperCase();
 };
 
-export default function CarouselAICreatorModal({ isOpen, onClose, onCreatePost, isPageView }: CarouselAICreatorModalProps) {
-  const [format, setFormat] = useState<'1080x1920' | '1080x1350' | '1080x1080' | '1920x1080'>('1080x1350');
+export default function CarouselAICreatorModal({
+  isOpen,
+  onClose,
+  onCreatePost,
+  isPageView,
+  userPlan = 'free',
+  isTeamMember = false,
+  userId,
+  onOpenPricing
+}: CarouselAICreatorModalProps) {
+  const [format, setFormat] = useState<'1080x1350' | '1080x1920' | '1080x1080' | '1920x1080'>('1080x1350');
   const [topic, setTopic] = useState('');
   const [detailedPrompt, setDetailedPrompt] = useState('');
   const [goal, setGoal] = useState('Atrair seguidores e gerar engajamento');
@@ -61,6 +77,10 @@ export default function CarouselAICreatorModal({ isOpen, onClose, onCreatePost, 
   const [themeStyle, setThemeStyle] = useState<'dark-neon' | 'minimal-clean' | 'sunset-vibrant' | 'emerald-luxury' | 'cyberpunk' | 'custom'>('dark-neon');
   const [customThemePrompt, setCustomThemePrompt] = useState('Estilo sofisticado com tipografia moderna, fundo escuro e detalhes marcantes');
   
+  // AI Limit & Quota state
+  const [quotaStatus, setQuotaStatus] = useState<AIQuotaStatus | null>(null);
+  const [isLimitModalOpen, setIsLimitModalOpen] = useState(false);
+
   // Content Mode: AI or Manual
   const [contentMode, setContentMode] = useState<'ai' | 'manual'>('ai');
   const [manualSlides, setManualSlides] = useState<{ title: string; subtitle: string }[]>([
@@ -141,7 +161,25 @@ export default function CarouselAICreatorModal({ isOpen, onClose, onCreatePost, 
 
   const handleGenerate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (contentMode === 'ai' && !topic.trim()) return;
+    if (contentMode === 'ai') {
+      if (!topic.trim()) return;
+
+      // Validate AI quota and plan
+      const quotaCheck = checkAIQuota(userPlan, isTeamMember, userId);
+      if (!quotaCheck.allowed) {
+        setQuotaStatus(quotaCheck);
+        setIsLimitModalOpen(true);
+        return;
+      }
+
+      // Consume 1 AI request from quota
+      const consumeResult = consumeAIQuota(userPlan, isTeamMember, userId, 1);
+      if (!consumeResult.success) {
+        setQuotaStatus(consumeResult.status);
+        setIsLimitModalOpen(true);
+        return;
+      }
+    }
 
     setIsGenerating(true);
     setSavedToGrid(false);
@@ -472,26 +510,36 @@ export default function CarouselAICreatorModal({ isOpen, onClose, onCreatePost, 
     <div className={`relative w-full ${isPageView ? 'h-full' : 'max-w-6xl max-h-[95vh] h-[90vh]'} bg-panel-card border border-panel-border rounded-3xl shadow-2xl flex flex-col overflow-hidden`}>
         
         {/* HEADER */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-panel-border bg-panel-black">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-panel-border bg-panel-black gap-4">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-accent-purple/20 text-accent-purple border border-accent-purple/30">
               <Sparkles size={20} className="animate-pulse" />
             </div>
             <div>
-              <h3 className="text-base font-display font-bold text-white">
-                Criação de Carrossel & Posts com IA (HTML/CSS + Renderizador)
-              </h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base font-display font-bold text-white">
+                  Criação de Carrossel & Posts com IA
+                </h3>
+                <AIQuotaBadge
+                  userPlan={userPlan}
+                  isTeamMember={isTeamMember}
+                  userId={userId}
+                  onOpenUpgrade={onOpenPricing}
+                />
+              </div>
               <p className="text-xs text-zinc-400 font-mono">
-                Gere carrosséis profissionais prontos com templates HTML/CSS nos formatos exigidos
+                Gere carrosséis visuais profissionais prontos para publicação nos formatos ideais
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-xl bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all cursor-pointer"
-          >
-            <X size={18} />
-          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-2 rounded-xl bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-all cursor-pointer"
+            >
+              <X size={18} />
+            </button>
+          )}
         </div>
 
         {/* CONTENT GRID */}
@@ -1026,13 +1074,25 @@ export default function CarouselAICreatorModal({ isOpen, onClose, onCreatePost, 
       </div>
   );
 
-  if (isPageView) {
-    return <div className="w-full h-full pb-10">{content}</div>;
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
-      {content}
-    </div>
+    <>
+      {isPageView ? (
+        <div className="w-full h-full pb-10">{content}</div>
+      ) : (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+          {content}
+        </div>
+      )}
+
+      <AILimitModal
+        isOpen={isLimitModalOpen}
+        onClose={() => setIsLimitModalOpen(false)}
+        quotaStatus={quotaStatus}
+        onOpenPricing={() => {
+          setIsLimitModalOpen(false);
+          if (onOpenPricing) onOpenPricing();
+        }}
+      />
+    </>
   );
 }

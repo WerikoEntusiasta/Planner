@@ -1,7 +1,6 @@
 {
-  "name": "Planner de Conteúdo",
+  "name": "Planner",
   "description": "Um planejador visual de conteúdo integrado para Instagram, TikTok e YouTube com calendário, visualização em cards e controle de funil.",
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

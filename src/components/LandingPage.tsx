@@ -40,12 +40,26 @@ import LegalTextsDialog from './LegalTextsDialog';
 interface LandingPageProps {
   onLogin: (user: User) => void;
   onEnterAdminMode: () => void;
+  initialAuthOpen?: boolean;
+  initialTab?: 'login' | 'register';
 }
 
-export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPageProps) {
+export default function LandingPage({ 
+  onLogin, 
+  onEnterAdminMode, 
+  initialAuthOpen = false, 
+  initialTab = 'login' 
+}: LandingPageProps) {
   const { t } = useLanguage();
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [isLoginTab, setIsLoginTab] = useState(true);
+  const [isAuthOpen, setIsAuthOpen] = useState(initialAuthOpen);
+  const [isLoginTab, setIsLoginTab] = useState(initialTab === 'login');
+
+  useEffect(() => {
+    if (initialAuthOpen) {
+      setIsAuthOpen(true);
+      setIsLoginTab(initialTab === 'login');
+    }
+  }, [initialAuthOpen, initialTab]);
   
   // Invite states
   const [invitedByHostId, setInvitedByHostId] = useState<string | null>(null);
@@ -56,7 +70,7 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
     deleteCards: true,
     manageClients: true
   });
-  const [selectedPlan, setSelectedPlan] = useState<'free' | 'basic' | 'pro' | 'growth'>('free');
+  const [selectedPlan, setSelectedPlan] = useState<'free' | 'starter' | 'basic' | 'pro' | 'growth'>('free');
   const [selectedBillingCycle, setSelectedBillingCycle] = useState<'monthly' | 'quarterly'>('monthly');
   const [selectedCurrency, setSelectedCurrency] = useState<'brl' | 'usd'>(() => {
     if (typeof window !== 'undefined' && (navigator.language.startsWith('en') || !navigator.language.startsWith('pt'))) {
@@ -68,7 +82,7 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
   const [activeLegalTab, setActiveLegalTab] = useState<'terms' | 'privacy' | null>(null);
   const [isRedirectingCheckout, setIsRedirectingCheckout] = useState(false);
   const [isStripeConfigModalOpen, setIsStripeConfigModalOpen] = useState(false);
-  const [pendingPlanForCheckout, setPendingPlanForCheckout] = useState<'basic' | 'pro' | 'growth' | null>(null);
+  const [pendingPlanForCheckout, setPendingPlanForCheckout] = useState<'starter' | 'basic' | 'pro' | 'growth' | null>(null);
   const [stripeSecretKeyInput, setStripeSecretKeyInput] = useState('');
   const [stripePublishableKeyInput, setStripePublishableKeyInput] = useState('');
   const [isSavingStripeKey, setIsSavingStripeKey] = useState(false);
@@ -97,7 +111,7 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
   }, []);
 
   // Handle Stripe External Checkout redirect
-  const handleStripeCheckout = async (plan: 'basic' | 'pro' | 'growth') => {
+  const handleStripeCheckout = async (plan: 'starter' | 'basic' | 'pro' | 'growth') => {
     setIsRedirectingCheckout(true);
     setError('');
     setPendingPlanForCheckout(plan);
@@ -246,6 +260,12 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
         setIsLoginTab(false); // Go to signup
         setIsAuthOpen(true); // Open modal
       }
+    } else if (params.get('signup') === 'true' || params.get('register') === 'true' || params.get('tab') === 'register' || params.get('tab') === 'signup') {
+      setIsLoginTab(false);
+      setIsAuthOpen(true);
+    } else if (params.get('auth') === 'open' || params.get('login') === 'true') {
+      setIsLoginTab(true);
+      setIsAuthOpen(true);
     }
   }, []);
 
@@ -1199,7 +1219,7 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
           <span>{t('securePaymentStripe', 'Pagamento 100% Seguro via Stripe (Cartão de Crédito)')}</span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto text-left">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5 max-w-[1400px] mx-auto text-left">
           
           {/* Card Plano Free */}
           <div className="p-6 bg-panel-card border border-panel-border rounded-2xl shadow-lg relative flex flex-col justify-between">
@@ -1215,7 +1235,7 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
               
               <ul className="space-y-3 mt-6 border-t border-panel-border/50 pt-4">
                 {[
-                  t('freeFeat1', 'Até 3 Clientes/Marcas'),
+                  t('freeFeat1', 'Até 2 Clientes/Marcas'),
                   t('freeFeat2', '1 Membro de Equipe'),
                   t('freeFeat3', 'Calendário editorial'),
                   t('freeFeat4', 'Gestão visual Kanban')
@@ -1237,6 +1257,61 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
               className="w-full mt-6 py-2.5 rounded-xl text-xs font-bold bg-zinc-850 hover:bg-zinc-800 border border-panel-border text-white transition-all cursor-pointer text-center font-display"
             >
               {t('startFree', 'Começar Grátis')}
+            </button>
+          </div>
+
+          {/* Card Plano Starter */}
+          <div className="p-6 bg-panel-card border border-panel-border rounded-2xl shadow-lg relative flex flex-col justify-between">
+            <div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold uppercase font-mono text-blue-400">{t('starterPlanTitle', 'Plano Starter')}</span>
+                <span className="px-2 py-0.5 rounded bg-blue-500/15 text-[9px] font-bold text-blue-400 border border-blue-500/10">Iniciante</span>
+              </div>
+              <h3 className="text-3xl font-display font-extrabold text-white mt-4">
+                {selectedCurrency === 'brl' 
+                  ? (selectedBillingCycle === 'monthly' ? 'R$ 14,99' : 'R$ 42,00')
+                  : (selectedBillingCycle === 'monthly' ? '$3.99' : '$10.99')
+                }
+                <span className="text-xs font-normal text-zinc-500">
+                  {selectedBillingCycle === 'monthly' ? ' / ' + t('month', 'mês') : ' / ' + t('3months', '3 meses')}
+                </span>
+                {selectedBillingCycle === 'quarterly' && (
+                  <span className="block text-[10px] text-emerald-400 font-mono font-bold mt-1.5 leading-tight">
+                    {selectedCurrency === 'brl' 
+                      ? 'Equivale a R$ 14,00/mês' 
+                      : 'Equivalent to $3.66/month'
+                    }
+                  </span>
+                )}
+              </h3>
+              <p className="text-[11px] text-zinc-400 mt-2 leading-relaxed">{t('starterPlanSub', 'Ideal para freelancers e criadores solo com primeiros clientes.')}</p>
+              
+              <ul className="space-y-3 mt-6 border-t border-panel-border/50 pt-4">
+                {[
+                  t('starterFeat1', 'Até 4 Clientes/Marcas'),
+                  t('starterFeat2', 'Até 2 Membros de Equipe'),
+                  t('starterFeat3', 'Calendário Multicanal (Insta, TikTok, YT, In)'),
+                  t('starterFeat4', 'Kanban de Produção & Pipeline de Status'),
+                  t('starterFeat5', 'Link Público de Aprovação sem login'),
+                  t('starterFeat6', 'Upload Manual de Mídias e Roteiros'),
+                  t('starterFeat7', 'Metas Estratégicas & Checklist por Marca'),
+                  t('starterFeat8', 'Exportação da Grade em PDF')
+                ].map((feat, idx) => (
+                  <li key={idx} className="flex items-center gap-2 text-xs text-zinc-300">
+                    <CheckCircle2 size={13} className="text-blue-400 shrink-0" />
+                    <span>{feat}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <button
+              onClick={() => handleStripeCheckout('starter')}
+              disabled={isRedirectingCheckout}
+              className="w-full mt-6 py-2.5 rounded-xl text-xs font-bold bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-white transition-all cursor-pointer text-center font-display flex items-center justify-center gap-1.5"
+            >
+              <Zap size={14} className="text-blue-400" />
+              <span>{isRedirectingCheckout ? t('processingCheckoutStripe', 'Gerando Checkout do Stripe...') : t('checkoutStripeStarter', 'Assinar Plano Starter')}</span>
             </button>
           </div>
 
@@ -1270,11 +1345,17 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
                 {[
                   t('basicFeat1', 'Até 8 Clientes/Marcas'),
                   t('basicFeat2', 'Até 3 Membros de Equipe'),
-                  t('basicFeat3', 'Permissões personalizadas'),
-                  t('basicFeat4', 'Tudo do plano gratuito')
+                  t('basicFeat3', 'Acesso IA de planejamento com limites'),
+                  t('basicFeat4', 'Criador de Carrosséis & Posts com IA'),
+                  t('basicFeat5', 'Exportação de Carrosséis em ZIP e PNG HD'),
+                  t('basicFeat6', 'Calendário Multicanal & Kanban de Produção'),
+                  t('basicFeat7', 'Link Público de Aprovação sem login'),
+                  t('basicFeat8', 'Upload Manual de Mídias e Roteiros'),
+                  t('basicFeat9', 'Metas Estratégicas & Checklist por Marca'),
+                  t('basicFeat10', 'Exportação da Grade e Relatórios em PDF')
                 ].map((feat, idx) => (
                   <li key={idx} className="flex items-center gap-2 text-xs text-zinc-300">
-                    <CheckCircle2 size={13} className="text-accent-purple" />
+                    <CheckCircle2 size={13} className="text-accent-purple shrink-0" />
                     <span>{feat}</span>
                   </li>
                 ))}
@@ -1323,11 +1404,20 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
                 {[
                   t('proFeat1', 'Até 14 Clientes/Marcas'),
                   t('proFeat2', 'Até 5 Membros de Equipe'),
-                  t('proFeat3', 'Permissões completas'),
-                  t('proFeat4', 'Suporte dedicado')
+                  t('proFeat3', 'IA de planejamento com limites'),
+                  t('proFeat4', 'Criador de Carrosséis & Posts com IA'),
+                  t('proFeat5', 'Exportação de Carrosséis em ZIP e PNG HD'),
+                  t('proFeat6', 'Central de Referências & Hub de Inspirações'),
+                  t('proFeat7', 'Diagnóstico & Análise Estratégica do Calendário com IA'),
+                  t('proFeat8', 'Calendário Multicanal & Kanban de Produção'),
+                  t('proFeat9', 'Link Público de Aprovação com Feedback em Tempo Real'),
+                  t('proFeat10', 'Upload Manual de Mídias e Roteiros'),
+                  t('proFeat11', 'Metas Estratégicas & Métricas de Frequência'),
+                  t('proFeat12', 'Exportação da Grade e Relatórios em PDF'),
+                  t('proFeat13', 'Suporte Prioritário via WhatsApp e E-mail')
                 ].map((feat, idx) => (
                   <li key={idx} className="flex items-center gap-2 text-xs text-zinc-300">
-                    <CheckCircle2 size={13} className="text-accent-orange" />
+                    <CheckCircle2 size={13} className="text-accent-orange shrink-0" />
                     <span>{feat}</span>
                   </li>
                 ))}
@@ -1372,13 +1462,22 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
               
               <ul className="space-y-3 mt-6 border-t border-panel-border/50 pt-4">
                 {[
-                  t('growthFeat1', 'Até 20 Clientes/Marcas'),
-                  t('growthFeat2', 'Até 10 Membros de Equipe'),
-                  t('growthFeat3', 'Painel de controle total'),
-                  t('growthFeat4', 'Prioridade máxima')
+                  t('growthFeat1', 'Até 25 Clientes/Marcas'),
+                  t('growthFeat2', 'Até 8 Membros de Equipe com controle total'),
+                  t('growthFeat3', 'IA de planejamento sem limites'),
+                  t('growthFeat4', 'Criador de Carrosséis & Posts com IA'),
+                  t('growthFeat5', 'Exportação de Carrosséis em ZIP e PNG HD'),
+                  t('growthFeat6', 'Central de Referências & Hub de Inspirações'),
+                  t('growthFeat7', 'Diagnóstico & Análise Estratégica do Calendário com IA'),
+                  t('growthFeat8', 'Calendário Multicanal & Kanban de Produção'),
+                  t('growthFeat9', 'Links Públicos de Aprovação Ilimitados'),
+                  t('growthFeat10', 'Upload Manual de Mídias e Roteiros'),
+                  t('growthFeat11', 'Metas Estratégicas & Métricas de Frequência'),
+                  t('growthFeat12', 'Exportação Completa de Relatórios em PDF'),
+                  t('growthFeat13', 'Suporte Prioritário Dedicado')
                 ].map((feat, idx) => (
                   <li key={idx} className="flex items-center gap-2 text-xs text-zinc-300">
-                    <CheckCircle2 size={13} className="text-emerald-400" />
+                    <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
                     <span>{feat}</span>
                   </li>
                 ))}
@@ -1624,10 +1723,11 @@ export default function LandingPage({ onLogin, onEnterAdminMode }: LandingPagePr
                       onChange={(e) => setSelectedPlan(e.target.value as any)}
                       className="w-full bg-zinc-900/80 border border-panel-border hover:border-zinc-700 focus:border-accent-purple rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-all cursor-pointer"
                     >
-                      <option value="free">{t('optFreePlan', 'Plano Gratuito (R$ 0 - Até 3 Clientes & 1 Membro)')}</option>
-                      <option value="basic">{t('optBasicPlan', 'Plano Basic (R$ 14,99 - Clientes Ilimitados & 3 Membros) (Em breve)')}</option>
-                      <option value="pro">{t('optProPlan', 'Plano Pro (R$ 29,99 - Clientes Ilimitados & 5 Membros) (Em breve)')}</option>
-                      <option value="growth">{t('optGrowthPlan', 'Plano Growth PRO (R$ 49,90 - Clientes Ilimitados & 10 Membros) (Em breve)')}</option>
+                      <option value="free">{t('optFreePlan', 'Plano Gratuito (R$ 0 - Até 2 Clientes & 1 Membro)')}</option>
+                      <option value="starter">{t('optStarterPlan', 'Plano Starter (R$ 14,99 - Até 4 Clientes & 2 Membros)')}</option>
+                      <option value="basic">{t('optBasicPlan', 'Plano Basic (R$ 29,00 - Até 8 Clientes & 3 Membros)')}</option>
+                      <option value="pro">{t('optProPlan', 'Plano Pro (R$ 49,00 - Até 14 Clientes & 5 Membros)')}</option>
+                      <option value="growth">{t('optGrowthPlan', 'Plano Growth PRO (R$ 79,00 - Até 25 Clientes & 8 Membros)')}</option>
                     </select>
                   </div>
                 )}

@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { Sparkles, Bot, Flame, Send, Plus, Check, RefreshCw, Lightbulb, Zap, ArrowRight, Calendar, Layers } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { FunnelStage, Platform, ContentFormat, Post } from '../types';
+import AIQuotaBadge from './AIQuotaBadge';
+import AILimitModal from './AILimitModal';
+import { checkAIQuota, consumeAIQuota, AIQuotaStatus } from '../services/aiUsageService';
 
 interface GeneratedIdea {
   id: string;
@@ -18,9 +21,19 @@ interface GeneratedIdea {
 
 interface IAChatSuggesterProps {
   onCreatePostFromAI?: (idea: Partial<Post> | Partial<Post>[]) => void;
+  userPlan?: string;
+  isTeamMember?: boolean;
+  userId?: string;
+  onOpenPricing?: () => void;
 }
 
-export default function IAChatSuggester({ onCreatePostFromAI }: IAChatSuggesterProps) {
+export default function IAChatSuggester({
+  onCreatePostFromAI,
+  userPlan = 'free',
+  isTeamMember = false,
+  userId,
+  onOpenPricing,
+}: IAChatSuggesterProps) {
   const { t } = useLanguage();
   const [generationMode, setGenerationMode] = useState<'single' | 'weekly' | 'monthly'>('single');
   const [mediaCount, setMediaCount] = useState<number>(5);
@@ -33,9 +46,29 @@ export default function IAChatSuggester({ onCreatePostFromAI }: IAChatSuggesterP
   const [createdIdeaId, setCreatedIdeaId] = useState<string | null>(null);
   const [allApplied, setAllApplied] = useState(false);
 
+  // AI Quota state
+  const [quotaStatus, setQuotaStatus] = useState<AIQuotaStatus | null>(null);
+  const [isLimitModalOpen, setIsLimitModalOpen] = useState(false);
+
   const handleGenerateIdeas = (e: React.FormEvent) => {
     e.preventDefault();
     if (!topic.trim()) return;
+
+    // Check AI quota and plan availability
+    const quotaCheck = checkAIQuota(userPlan, isTeamMember, userId);
+    if (!quotaCheck.allowed) {
+      setQuotaStatus(quotaCheck);
+      setIsLimitModalOpen(true);
+      return;
+    }
+
+    // Consume 1 request from quota
+    const consumeResult = consumeAIQuota(userPlan, isTeamMember, userId, 1);
+    if (!consumeResult.success) {
+      setQuotaStatus(consumeResult.status);
+      setIsLimitModalOpen(true);
+      return;
+    }
 
     setIsGenerating(true);
     setCreatedIdeaId(null);
@@ -139,14 +172,22 @@ export default function IAChatSuggester({ onCreatePostFromAI }: IAChatSuggesterP
       
       <div>
         {/* HEADER */}
-        <div className="flex items-center justify-between border-b border-panel-border/40 pb-4 mb-4">
+        <div className="flex items-center justify-between border-b border-panel-border/40 pb-4 mb-4 gap-2 flex-wrap">
           <h4 className="text-xs font-mono font-bold text-zinc-200 uppercase tracking-widest flex items-center gap-2">
             <Bot size={16} className="text-accent-purple animate-pulse" />
-            IA Criativa & Planejamento
+            IA Criativa
           </h4>
-          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-mono font-black bg-accent-orange/15 text-accent-orange border border-accent-orange/30 uppercase tracking-wider">
-            <Flame size={12} className="animate-bounce" /> Gemini AI
-          </span>
+          <div className="flex items-center gap-1.5">
+            <AIQuotaBadge
+              userPlan={userPlan}
+              isTeamMember={isTeamMember}
+              userId={userId}
+              onOpenUpgrade={onOpenPricing}
+            />
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[9px] font-mono font-black bg-accent-orange/15 text-accent-orange border border-accent-orange/30 uppercase tracking-wider">
+              <Flame size={10} className="animate-bounce" /> Gemini
+            </span>
+          </div>
         </div>
 
         {/* MODE TABS */}
@@ -376,6 +417,16 @@ export default function IAChatSuggester({ onCreatePostFromAI }: IAChatSuggesterP
       <div className="text-center pt-3 border-t border-panel-border/40 text-[10px] font-mono text-zinc-500 mt-2">
         Google Gemini AI • Assistente Criativo Multicanal
       </div>
+
+      <AILimitModal
+        isOpen={isLimitModalOpen}
+        onClose={() => setIsLimitModalOpen(false)}
+        quotaStatus={quotaStatus}
+        onOpenPricing={() => {
+          setIsLimitModalOpen(false);
+          if (onOpenPricing) onOpenPricing();
+        }}
+      />
     </div>
   );
 }

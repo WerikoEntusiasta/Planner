@@ -34,6 +34,7 @@ import PostEditorView from './components/PostEditorView';
 import StrategicMetricsRow from './components/StrategicMetricsRow';
 import SeoRouter from './seo/SeoRouter';
 import { Sparkles, BarChart2, Calendar as CalendarIcon, Target, Plus, Heart, HelpCircle, Shield, ChevronDown } from 'lucide-react';
+import { useSocket } from './hooks/useSocket';
 
 export default function App() {
   const [posts, setPosts] = useState<Post[]>([]);
@@ -46,6 +47,17 @@ export default function App() {
   const [isCampaignsModalOpen, setIsCampaignsModalOpen] = useState(false);
   const [isReferenceHubModalOpen, setIsReferenceHubModalOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const socket = useSocket();
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('post-status-updated', ({ postId, status }) => {
+      setPosts(prev => prev.map(p => p.id === postId ? { ...p, status: status === 'approved' ? 'scheduled' : 'draft' } : p));
+    });
+    return () => {
+      socket.off('post-status-updated');
+    };
+  }, [socket]);
 
   // Auth States
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -95,10 +107,10 @@ export default function App() {
       path.includes('/obrigado')
     );
   });
-  const [paymentSuccessPlan, setPaymentSuccessPlan] = useState<'free' | 'basic' | 'pro' | 'growth'>(() => {
+  const [paymentSuccessPlan, setPaymentSuccessPlan] = useState<'free' | 'starter' | 'basic' | 'pro' | 'growth'>(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const plan = urlParams.get('plan');
-    return (plan === 'free' || plan === 'basic' || plan === 'pro' || plan === 'growth') ? plan : 'pro';
+    return (plan === 'free' || plan === 'starter' || plan === 'basic' || plan === 'pro' || plan === 'growth') ? plan : 'pro';
   });
   const [paymentSuccessCycle, setPaymentSuccessCycle] = useState<'monthly' | 'quarterly'>(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -106,7 +118,7 @@ export default function App() {
     return cycle === 'quarterly' ? 'quarterly' : 'monthly';
   });
 
-  const handleOpenPaymentSuccess = (plan?: 'free' | 'basic' | 'pro' | 'growth', cycle?: 'monthly' | 'quarterly') => {
+  const handleOpenPaymentSuccess = (plan?: 'free' | 'starter' | 'basic' | 'pro' | 'growth', cycle?: 'monthly' | 'quarterly') => {
     if (plan) setPaymentSuccessPlan(plan);
     if (cycle) setPaymentSuccessCycle(cycle);
     setShowPaymentSuccessPage(true);
@@ -123,6 +135,21 @@ export default function App() {
   const [editPostTarget, setEditPostTarget] = useState<Post | null>(null);
   const [calendarTargetDate, setCalendarTargetDate] = useState<string | undefined>(undefined);
   const [showDemoNotice, setShowDemoNotice] = useState(false);
+  const [openSignUpOnLanding, setOpenSignUpOnLanding] = useState(false);
+  const [activeAnnouncement, setActiveAnnouncement] = useState<any | null>(null);
+  const [dismissedAnnouncement, setDismissedAnnouncement] = useState(false);
+
+  // Fetch active global announcement from server
+  useEffect(() => {
+    fetch('/api/announcements/active')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.announcement) {
+          setActiveAnnouncement(data.announcement);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Increment SaaS accesses tracking counter on session start
   useEffect(() => {
@@ -555,7 +582,7 @@ export default function App() {
     return freshOwner || currentUser;
   };
 
-  const handleUpdateUserPlan = (plan: 'free' | 'basic' | 'pro' | 'growth', billingCycle?: 'monthly' | 'quarterly') => {
+  const handleUpdateUserPlan = (plan: 'free' | 'starter' | 'basic' | 'pro' | 'growth', billingCycle?: 'monthly' | 'quarterly') => {
     if (!currentUser) return;
     const targetUserId = currentUser.isTeamMember ? currentUser.invitedByUserId : currentUser.id;
     const activeBillingCycle = billingCycle || 'monthly';
@@ -631,8 +658,20 @@ export default function App() {
     const ownerPlan = owner?.plan || 'free';
     const currentClientsCount = clients.filter(c => c.userId === workspaceOwnerId).length;
 
-    if (ownerPlan === 'free' && currentClientsCount >= 3) {
-      alert('O Plano Gratuito permite gerenciar no máximo 3 Marcas/Clientes. Faça upgrade para o Plano Basic para cadastrar marcas ilimitadas.');
+    const maxClients = ownerPlan === 'growth' ? 25 : ownerPlan === 'pro' ? 14 : ownerPlan === 'basic' ? 8 : ownerPlan === 'starter' ? 4 : 2;
+
+    if (currentClientsCount >= maxClients) {
+      if (ownerPlan === 'free') {
+        alert('O Plano Gratuito permite gerenciar no máximo 2 Marcas/Clientes. Faça upgrade para o Plano Starter ou superior para cadastrar mais marcas.');
+      } else if (ownerPlan === 'starter') {
+        alert('O Plano Starter permite gerenciar no máximo 4 Marcas/Clientes. Faça upgrade para o Plano Basic para cadastrar mais marcas.');
+      } else if (ownerPlan === 'basic') {
+        alert('O Plano Basic permite gerenciar no máximo 8 Marcas/Clientes. Faça upgrade para o Plano Pro para cadastrar mais marcas.');
+      } else if (ownerPlan === 'pro') {
+        alert('O Plano Pro permite gerenciar no máximo 14 Marcas/Clientes. Faça upgrade para o Plano Growth PRO para cadastrar mais marcas.');
+      } else {
+        alert('Limite máximo de 25 Marcas/Clientes atingido para o plano Growth PRO.');
+      }
       setIsTeamModalOpen(true);
       return;
     }
@@ -918,8 +957,13 @@ export default function App() {
   if (!currentUser) {
     return (
       <LandingPage 
-        onLogin={(user) => setCurrentUser(user)} 
+        onLogin={(user) => {
+          setCurrentUser(user);
+          setOpenSignUpOnLanding(false);
+        }} 
         onEnterAdminMode={() => setIsAdminMode(true)}
+        initialAuthOpen={openSignUpOnLanding}
+        initialTab="register"
       />
     );
   }
@@ -979,7 +1023,41 @@ export default function App() {
         ) : (
           <>
 
-
+        {/* Global Announcement Banner (Broadcast) */}
+        {activeAnnouncement && !dismissedAnnouncement && (
+          <div className={`border-b px-6 py-2 text-xs font-medium flex items-center justify-between gap-3 shadow-md flex-shrink-0 transition-all ${
+            activeAnnouncement.type === 'warning' 
+              ? 'bg-amber-950/80 text-amber-200 border-amber-500/30' 
+              : activeAnnouncement.type === 'alert'
+              ? 'bg-red-950/80 text-red-200 border-red-500/30'
+              : 'bg-accent-purple/20 text-purple-200 border-accent-purple/40'
+          }`}>
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <span className="w-2 h-2 rounded-full bg-current animate-pulse shrink-0" />
+              <p className="truncate">
+                <strong className="font-bold mr-1">{activeAnnouncement.title}:</strong>
+                {activeAnnouncement.message}
+              </p>
+              {activeAnnouncement.link && (
+                <a
+                  href={activeAnnouncement.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-bold hover:text-white shrink-0 ml-1 text-[11px]"
+                >
+                  {activeAnnouncement.linkText || 'Saiba mais'} &rarr;
+                </a>
+              )}
+            </div>
+            <button
+              onClick={() => setDismissedAnnouncement(true)}
+              className="text-zinc-400 hover:text-white shrink-0 p-1 cursor-pointer"
+              title="Fechar aviso"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {isSimulatedSession && (
           <div className="bg-gradient-to-r from-accent-purple via-accent-orange to-accent-purple border-b border-white/10 px-6 py-2 text-xs text-black font-bold flex flex-wrap items-center justify-between gap-3 shadow-lg flex-shrink-0">
@@ -1187,6 +1265,10 @@ export default function App() {
             {activeView === 'carousel-ai' && (
               <CarouselAICreatorModal
                 isPageView={true}
+                userPlan={currentUser?.plan || 'free'}
+                isTeamMember={currentUser?.isTeamMember || false}
+                userId={currentUser?.id}
+                onOpenPricing={() => setIsTeamModalOpen(true)}
                 onCreatePost={(postData) => {
                   if (!currentUser || !workspaceOwnerId) return;
                   const newPost: Post = {
@@ -1221,6 +1303,10 @@ export default function App() {
           <Sidebar
             posts={clientPosts}
             goals={clientGoals}
+            userPlan={currentUser?.plan || 'free'}
+            isTeamMember={currentUser?.isTeamMember || false}
+            userId={currentUser?.id}
+            onOpenPricing={() => setIsTeamModalOpen(true)}
             onToggleGoal={handleToggleGoal}
             onAddQuickPost={handleAddQuickPost}
             onAddGoal={handleAddGoal}
@@ -1298,8 +1384,10 @@ export default function App() {
           isOpen={showDemoNotice}
           onClose={() => setShowDemoNotice(false)}
           onSignUp={() => {
+            setShowDemoNotice(false);
             setCurrentUser(null);
             localStorage.removeItem('creator_planner_logged_in_user');
+            setOpenSignUpOnLanding(true);
           }}
         />
 

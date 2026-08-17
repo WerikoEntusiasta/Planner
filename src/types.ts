@@ -20,9 +20,10 @@ export interface User {
   name: string;
   email: string;
   phone: string;
-  password?: string; // Stored locally for simulation
+  password?: string; // Optional legacy field, never stored in localStorage
+  token?: string; // Secure signed session token
   createdAt: string;
-  plan?: 'free' | 'basic' | 'pro' | 'growth';
+  plan?: 'free' | 'starter' | 'basic' | 'pro' | 'growth';
   billingCycle?: 'monthly' | 'quarterly';
   scheduledTerminationDate?: string;
   isTeamMember?: boolean;
@@ -148,6 +149,54 @@ export interface HolidayEvent {
   category: 'comemorativa' | 'nicho' | 'lancamento' | 'evento';
   suggestionHook: string;
   funnelStage: FunnelStage;
+}
+
+export interface Coupon {
+  id: string;
+  code: string;
+  discountType: 'percent' | 'fixed';
+  discountValue: number;
+  applicablePlans?: ('starter' | 'basic' | 'pro' | 'growth')[] | 'all';
+  applicableCycles?: ('monthly' | 'quarterly')[] | 'all';
+  maxUses?: number | null;
+  usedCount: number;
+  expiresAt?: string | null;
+  isActive: boolean;
+  createdAt: string;
+  description?: string;
+}
+
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  type: 'info' | 'warning' | 'success' | 'alert';
+  link?: string;
+  linkText?: string;
+  isActive: boolean | number;
+  createdAt: string;
+}
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  details: string;
+  category: string;
+  adminUser: string;
+  timestamp: string;
+}
+
+export interface AdminUserItem {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  plan: 'free' | 'starter' | 'basic' | 'pro' | 'growth';
+  isTeamMember: boolean;
+  invitedByUserId?: string | null;
+  createdAt: string;
+  clientCount: number;
+  postCount: number;
 }
 
 

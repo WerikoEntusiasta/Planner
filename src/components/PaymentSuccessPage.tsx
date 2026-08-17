@@ -20,11 +20,11 @@ import {
 } from 'lucide-react';
 
 interface PaymentSuccessPageProps {
-  initialPlan?: 'free' | 'basic' | 'pro' | 'growth';
+  initialPlan?: 'free' | 'starter' | 'basic' | 'pro' | 'growth';
   initialCycle?: 'monthly' | 'quarterly';
   currentUser: User | null;
   onGoToPlanner: () => void;
-  onUpdateUserPlan: (plan: 'free' | 'basic' | 'pro' | 'growth', cycle?: 'monthly' | 'quarterly') => void;
+  onUpdateUserPlan: (plan: 'free' | 'starter' | 'basic' | 'pro' | 'growth', cycle?: 'monthly' | 'quarterly') => void;
   onOpenTeamModal?: () => void;
   onBackToHome?: () => void;
 }
@@ -39,7 +39,7 @@ export default function PaymentSuccessPage({
   onBackToHome,
 }: PaymentSuccessPageProps) {
   const { t } = useLanguage();
-  const [activePlan, setActivePlan] = useState<'free' | 'basic' | 'pro' | 'growth'>(initialPlan);
+  const [activePlan, setActivePlan] = useState<'free' | 'starter' | 'basic' | 'pro' | 'growth'>(initialPlan);
   const [activeCycle, setActiveCycle] = useState<'monthly' | 'quarterly'>(initialCycle);
   const [transactionId, setTransactionId] = useState(() => {
     const urlParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
@@ -59,7 +59,7 @@ export default function PaymentSuccessPage({
     const planParam = urlParams.get('plan');
     const cycleParam = urlParams.get('cycle');
 
-    if (planParam && ['free', 'basic', 'pro', 'growth'].includes(planParam)) {
+    if (planParam && ['free', 'starter', 'basic', 'pro', 'growth'].includes(planParam)) {
       setActivePlan(planParam as any);
     }
     if (cycleParam && ['monthly', 'quarterly'].includes(cycleParam)) {
@@ -73,7 +73,7 @@ export default function PaymentSuccessPage({
           if (data.success && data.session) {
             setTransactionId(data.session.id);
             setStripeStatus(data.session.payment_status === 'paid' ? 'Stripe Verificado' : data.session.payment_status);
-            if (data.session.plan && ['free', 'basic', 'pro', 'growth'].includes(data.session.plan)) {
+            if (data.session.plan && ['free', 'starter', 'basic', 'pro', 'growth'].includes(data.session.plan)) {
               setActivePlan(data.session.plan);
             }
             if (data.session.cycle && ['monthly', 'quarterly'].includes(data.session.cycle)) {
@@ -97,6 +97,9 @@ export default function PaymentSuccessPage({
   // Price calculations
   const getPriceDisplay = () => {
     if (activePlan === 'free') return 'R$ 0,00';
+    if (activePlan === 'starter') {
+      return activeCycle === 'quarterly' ? 'R$ 42,00' : 'R$ 14,99';
+    }
     if (activePlan === 'basic') {
       return activeCycle === 'quarterly' ? 'R$ 84,00' : 'R$ 29,00';
     }
@@ -111,6 +114,8 @@ export default function PaymentSuccessPage({
 
   const getPlanTitle = () => {
     switch (activePlan) {
+      case 'starter':
+        return t('planStarterTitleSuccess', 'Plano Starter Ativado com Sucesso!');
       case 'basic':
         return t('planBasicTitleSuccess', 'Plano Basic Ativado com Sucesso!');
       case 'pro':
@@ -125,6 +130,8 @@ export default function PaymentSuccessPage({
 
   const getPlanBadge = () => {
     switch (activePlan) {
+      case 'starter':
+        return { label: t('starterPlanTitle', 'Plano Starter'), color: 'bg-blue-600 text-white border-blue-500/30' };
       case 'basic':
         return { label: t('planBasicTitle', 'Plano Basic'), color: 'bg-accent-purple text-white border-accent-purple/30' };
       case 'pro':
@@ -139,9 +146,16 @@ export default function PaymentSuccessPage({
 
   const getPlanFeatures = () => {
     switch (activePlan) {
+      case 'starter':
+        return [
+          { title: t('starterFeat1', 'Até 4 Clientes/Marcas'), desc: 'Adicione marcas e canais com limite expandido' },
+          { title: t('starterFeat2', 'Até 2 Membros de Equipe'), desc: 'Convide colaboradores com permissões' },
+          { title: t('starterFeat3', 'Calendário editorial e Kanban'), desc: 'Organização visual completa de publicações' },
+          { title: t('starterFeat4', 'Link de aprovação sem login'), desc: 'Envie links públicos para clientes aprovarem' }
+        ];
       case 'basic':
         return [
-          { title: t('basicFeat1', 'Clientes Ilimitados'), desc: 'Adicione marcas e canais sem nenhuma restrição' },
+          { title: t('basicFeat1', 'Até 8 Clientes/Marcas'), desc: 'Adicione marcas e canais sem nenhuma restrição' },
           { title: t('basicFeat2', 'Até 3 Membros de Equipe'), desc: 'Convide colaboradores com permissões' },
           { title: t('basicFeat3', 'Permissões Personalizadas'), desc: 'Controle quem pode criar, editar ou excluir' },
           { title: t('basicFeat4', 'Roteiros & IA Avançada'), desc: 'Acesso total aos geradores estratégicos de conteúdo' },
@@ -149,7 +163,7 @@ export default function PaymentSuccessPage({
         ];
       case 'pro':
         return [
-          { title: t('proFeat1', 'Clientes Ilimitados'), desc: 'Gerencie quantas marcas você ou sua agência desejar' },
+          { title: t('proFeat1', 'Até 14 Clientes/Marcas'), desc: 'Gerencie quantas marcas você ou sua agência desejar' },
           { title: t('proFeat2', 'Até 5 Membros de Equipe'), desc: 'Ideal para equipes em expansão e redatores' },
           { title: t('proFeat3', 'Permissões Completas'), desc: 'Personalização avançada por membro' },
           { title: t('proFeat4', 'Suporte Dedicado VIP'), desc: 'Atendimento prioritário via WhatsApp' },
@@ -157,8 +171,8 @@ export default function PaymentSuccessPage({
         ];
       case 'growth':
         return [
-          { title: t('growthFeat1', 'Clientes Ilimitados'), desc: 'Acomode grandes portfólios corporativos' },
-          { title: t('growthFeat2', 'Até 10 Membros de Equipe'), desc: 'Estrutura completa para agências consolidadas' },
+          { title: t('growthFeat1', 'Até 25 Clientes/Marcas'), desc: 'Acomode grandes portfólios corporativos' },
+          { title: t('growthFeat2', 'Até 8 Membros de Equipe'), desc: 'Estrutura completa para agências consolidadas' },
           { title: t('growthFeat3', 'Painel de Controle Total'), desc: 'Auditoria de acessos e sincronização SQLite' },
           { title: t('growthFeat4', 'Prioridade Máxima de Suporte'), desc: 'Canal direto exclusivo com engenheiros' },
           { title: 'Backup & Sincronização em Nuvem', desc: 'Segurança absoluta para seus dados estratégicos' }
@@ -166,7 +180,7 @@ export default function PaymentSuccessPage({
       case 'free':
       default:
         return [
-          { title: t('freeFeat1', 'Até 3 Clientes/Marcas'), desc: 'Organização básica para creators solo' },
+          { title: t('freeFeat1', 'Até 2 Clientes/Marcas'), desc: 'Organização básica para creators solo' },
           { title: t('freeFeat2', '1 Membro de Equipe'), desc: 'Gerenciamento individual' },
           { title: t('freeFeat3', 'Calendário Editorial'), desc: 'Visão quinzenal e mensal' },
           { title: t('freeFeat4', 'Gestão Visual Kanban'), desc: 'Controle de rascunhos e agendamentos' }
@@ -372,7 +386,7 @@ export default function PaymentSuccessPage({
             🧪 {t('switchPlanPreview', 'Simular Visualização de Outro Plano')}:
           </span>
           <div className="flex flex-wrap items-center justify-center gap-2">
-            {(['free', 'basic', 'pro', 'growth'] as const).map((planKey) => (
+            {(['free', 'starter', 'basic', 'pro', 'growth'] as const).map((planKey) => (
               <button
                 key={planKey}
                 onClick={() => setActivePlan(planKey)}
