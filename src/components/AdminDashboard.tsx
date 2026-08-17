@@ -116,7 +116,8 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const [webhookTestResult, setWebhookTestResult] = useState<any>(null);
 
   // Carousel Slide Customizer State
-  const [slideImages, setSlideImages] = useState<Record<number, string>>({});
+  const [slideImages, setSlideImages] = useState<any[]>([]);
+  const [newImageName, setNewImageName] = useState('');
 
   // Environment Admin Credentials
   const envAdminEmail = (import.meta as any).env.VITE_ADMIN_EMAIL;
@@ -133,17 +134,45 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
     fetchStripeConfig();
   };
 
+  // Fetch slider images
+  const fetchSliderImages = async () => {
+    try {
+      const res = await fetch('/api/slider-images');
+      const data = await res.json();
+      if (data.success) {
+        setSlideImages(data.images);
+      }
+    } catch (e) {
+      console.error('Failed to load slider images:', e);
+    }
+  };
+
   useEffect(() => {
     fetchAllData();
-
-    // Load custom carousel images from localStorage
-    const loaded: Record<number, string> = {};
-    for (let i = 0; i < 4; i++) {
-      const img = localStorage.getItem(`carousel_slide_${i}_img`);
-      if (img) loaded[i] = img;
-    }
-    setSlideImages(loaded);
+    fetchSliderImages();
   }, []);
+
+  // Carousel Uploads
+  const handleSliderUpload = async (file: File, name: string) => {
+    const reader = new FileReader();
+    reader.onload = async (uploadEvent) => {
+      const base64 = uploadEvent.target?.result as string;
+      if (base64) {
+        await fetch('/api/admin/slider-images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: base64, name, order: slideImages.length })
+        });
+        fetchSliderImages();
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSliderDelete = async (id: string) => {
+    await fetch(`/api/admin/slider-images/${id}`, { method: 'DELETE' });
+    fetchSliderImages();
+  };
 
   // Fetchers
   const fetchMetrics = async () => {

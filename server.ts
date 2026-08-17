@@ -516,6 +516,12 @@ function initDatabase() {
     )
   `).run();
 
+    db.exec(`CREATE TABLE IF NOT EXISTS processed_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT,
+      processed_at TEXT
+    )`);
+  
   db.prepare(`
     CREATE TABLE IF NOT EXISTS payment_history (
       id TEXT PRIMARY KEY,
@@ -529,6 +535,16 @@ function initDatabase() {
       status TEXT DEFAULT 'succeeded',
       couponCode TEXT,
       stripeSessionId TEXT,
+      createdAt TEXT
+    )
+  `).run();
+
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS slider_images (
+      id TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      name TEXT,
+      displayOrder INTEGER DEFAULT 0,
       createdAt TEXT
     )
   `).run();
@@ -2360,6 +2376,24 @@ app.post('/api/stripe/checkout', async (req, res) => {
         });
       }
 
+      // Item 5: Cancel old subscriptions
+      if (isRecurringPrice && customerEmail) {
+        const customers = await stripe.customers.list({ email: customerEmail, limit: 1 });
+        if (customers.data.length > 0) {
+          const subscriptions = await stripe.subscriptions.list({
+            customer: customers.data[0].id,
+            status: 'active',
+            limit: 10
+          });
+          for (const sub of subscriptions.data) {
+            if (sub.metadata?.plan && sub.metadata.plan !== plan) {
+              await stripe.subscriptions.update(sub.id, { cancel_at_period_end: true });
+              console.log(`[Stripe] Assinatura antiga ${sub.id} (${sub.metadata.plan}) cancelada no fim do período`);
+            }
+          }
+        }
+      }
+
       const sessionPayload: any = {
         payment_method_types: ['card'],
         line_items: lineItems,
@@ -2372,9 +2406,15 @@ app.post('/api/stripe/checkout', async (req, res) => {
           currency,
           customerName,
           customerEmail: customerEmail || '',
-          userId: userId || '',
-          couponCode: appliedDiscount ? appliedDiscount.coupon.code : '',
-          discountPercent: appliedDiscount ? String(appliedDiscount.discountPercent) : '',
+          userId: userId || ''
+        },
+        subscription_data: {
+          metadata: {
+            plan,
+            cycle: selectedCycle,
+            currency,
+            userId: userId || ''
+          }
         },
         billing_address_collection: 'auto',
         success_url: `${baseUrl}/?payment=success&plan=${plan}&cycle=${selectedCycle}&session_id={CHECKOUT_SESSION_ID}${appliedDiscount ? `&coupon=${encodeURIComponent(appliedDiscount.coupon.code)}` : ''}`,
@@ -2385,25 +2425,7 @@ app.post('/api/stripe/checkout', async (req, res) => {
       try {
         session = await stripe.checkout.sessions.create(sessionPayload);
       } catch (createErr: any) {
-        // If price ID was invalid or belonging to another account, fallback to dynamic price data
-        if (priceId && (createErr?.message?.includes('No such price') || createErr?.message?.includes('resource_missing') || createErr?.message?.includes('mode'))) {
-          console.warn('[Stripe] Preço ID não encontrado no modo atual, usando price_data dinâmico no modo payment...');
-          sessionPayload.mode = 'payment';
-          sessionPayload.line_items = [{
-            price_data: {
-              currency: currency,
-              product_data: {
-                name: `Planner SaaS - Plano ${plan.toUpperCase()}${appliedDiscount ? ` (Cupom: ${appliedDiscount.coupon.code})` : ''}`,
-                description: `Assinatura Plano ${plan.toUpperCase()} (${selectedCycle}) - Planner SaaS`
-              },
-              unit_amount: unitAmount,
-            },
-            quantity: 1,
-          }];
-          session = await stripe.checkout.sessions.create(sessionPayload);
-        } else {
-          throw createErr;
-        }
+        throw createErr;
       }
 
       if (session?.url) {
@@ -2461,7 +2483,7 @@ app.get('/api/stripe/session-status', async (req, res) => {
     
     // Automatically update SQLite user plan if payment is complete
     if (session.payment_status === 'paid') {
-      const plan = session.metadata?.plan || 'pro';
+      const plan = session.metadata?.plan || 'free';
       const userEmail = session.customer_details?.email || session.metadata?.customerEmail;
       const userId = session.metadata?.userId || session.client_reference_id;
 
@@ -2531,17 +2553,35 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
 
   const sig = (req.headers['stripe-signature'] as string) || '';
 
-  if (stripe && webhookSecret && sig) {
-    try {
-      const payload = req.rawBody || JSON.stringify(req.body);
-      event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
-    } catch (err: any) {
-      console.warn('[Stripe Webhook] Falha na validação de assinatura:', err.message);
-      return res.status(400).send(`Webhook Signature Verification Error: ${err.message}`);
-    }
+  if (!stripe || !webhookSecret) {
+    console.error('[Stripe Webhook] Stripe ou webhook secret não configurado');
+    return res.status(500).json({ error: 'Webhook não configurado' });
+  }
+  if (!sig) {
+    return res.status(400).json({ error: 'Assinatura ausente' });
+  }
+  try {
+    const payload = req.rawBody || JSON.stringify(req.body);
+    event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
+  } catch (err: any) {
+    return res.status(400).json({ error: 'Assinatura inválida' });
   }
 
   const eventType = event?.type || 'unknown_event';
+  
+  // Item 9: Idempotency
+  try {
+    const existing = db.prepare('SELECT event_id FROM processed_webhook_events WHERE event_id = ?').get(event.id);
+    if (existing) {
+      return res.status(200).json({ received: true, message: 'Already processed' });
+    }
+    db.prepare('INSERT INTO processed_webhook_events (event_id, event_type, processed_at) VALUES (?, ?, ?)').run(
+      event.id, event.type, new Date().toISOString()
+    );
+  } catch (e) {
+    console.error('[Stripe Webhook] Error checking/setting idempotency:', e);
+  }
+
   console.log(`[Stripe Webhook] Evento recebido com sucesso: ${eventType}`);
 
   try {
@@ -2549,7 +2589,11 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
       case 'checkout.session.completed':
       case 'checkout.session.async_payment_succeeded': {
         const session = event.data?.object;
-        const plan = session?.metadata?.plan || 'pro';
+        const plan = session?.metadata?.plan;
+        if (!plan) {
+          console.warn('[Stripe Webhook] checkout.session.completed sem metadata.plan, ignorando');
+          break;
+        }
         const userEmail = session?.customer_details?.email || session?.customer_email || session?.metadata?.customerEmail;
         const userId = session?.metadata?.userId || session?.client_reference_id;
         const customerId = session?.customer;
@@ -2579,13 +2623,18 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         
         if (status === 'active' || status === 'trialing') {
           // If subscription is active, ensure user has paid plan
-          const plan = subscription?.metadata?.plan || 'pro';
+          const plan = subscription?.metadata?.plan;
+          if (!plan) {
+            console.warn('[Stripe Webhook] subscription.metadata.plan ausente, ignorando evento');
+            break;
+          }
           const userEmail = subscription?.customer_email;
           if (userEmail) {
             db.prepare('UPDATE users SET plan = ? WHERE email = ?').run(plan, userEmail);
             console.log(`[Stripe Webhook] Assinatura ativa para ${userEmail} (Plano: ${plan})`);
           }
         } else if (status === 'unpaid' || status === 'canceled' || status === 'past_due') {
+          console.warn(`[Stripe Webhook] Subscription status: ${status} para ${subscription?.customer_email}`);
           const userEmail = subscription?.customer_email;
           if (userEmail && status === 'canceled') {
             db.prepare('UPDATE users SET plan = ? WHERE email = ?').run('free', userEmail);
@@ -2608,6 +2657,16 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
       case 'invoice.payment_succeeded': {
         const invoice = event.data?.object;
         const customerEmail = invoice?.customer_email;
+        const amountPaid = invoice?.amount_paid;
+        const plan = invoice?.lines?.data[0]?.metadata?.plan || 'pro';
+        const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(customerEmail) as any;
+        
+        if(user) {
+          db.prepare(`INSERT INTO payment_history (id, userId, stripePaymentIntentId, amount, currency, status, plan, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+            `pay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, user.id, invoice.payment_intent || invoice.id,
+            amountPaid || 0, invoice.currency || 'brl', 'succeeded', plan, new Date().toISOString()
+          );
+        }
         console.log(`[Stripe Webhook] Fatura paga com sucesso para ${customerEmail || 'Cliente'}.`);
         break;
       }
@@ -2616,6 +2675,10 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         const invoice = event.data?.object;
         const customerEmail = invoice?.customer_email;
         console.warn(`[Stripe Webhook] Falha no pagamento da fatura para ${customerEmail || 'Cliente'}.`);
+        // Item 7: Track in audit logs
+        db.prepare('INSERT INTO audit_logs (id, action, description, user_id) VALUES (?, ?, ?, ?)').run(
+          crypto.randomUUID(), 'PAYMENT_FAILED', `Falha no pagamento da fatura para ${customerEmail}`, customerEmail || 'unknown'
+        );
         break;
       }
 
@@ -2632,6 +2695,32 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
     type: eventType,
     processedAt: new Date().toISOString()
   });
+});
+
+// Slider Images
+app.get('/api/slider-images', (req, res) => {
+  const images = db.prepare('SELECT * FROM slider_images ORDER BY displayOrder ASC').all();
+  res.json({ success: true, images });
+});
+
+app.post('/api/admin/slider-images', async (req, res) => {
+  const { url, name, order } = req.body;
+  if (!url) return res.status(400).json({ success: false, error: 'URL is required' });
+  
+  const count = (db.prepare('SELECT COUNT(*) as count FROM slider_images').get() as any)?.count || 0;
+  if (count >= 10) return res.status(400).json({ success: false, error: 'Limit of 10 images reached' });
+  
+  const id = `slide_${Date.now()}`;
+  db.prepare('INSERT INTO slider_images (id, url, name, displayOrder, createdAt) VALUES (?, ?, ?, ?, ?)').run(
+    id, url, name || '', order || 0, new Date().toISOString()
+  );
+  
+  res.json({ success: true, id });
+});
+
+app.delete('/api/admin/slider-images/:id', async (req, res) => {
+  db.prepare('DELETE FROM slider_images WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
 });
 
 // 6.6 Stripe Webhook Status & Ping Test Endpoint
