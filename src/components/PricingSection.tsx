@@ -346,6 +346,12 @@ export default function PricingSection({
           Eleve a produtividade dos seus conteúdos e aprove clientes com velocidade profissional. Cancele quando quiser.
         </p>
 
+        {/* 15 Days Free Trial Announcement Banner */}
+        <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-accent-purple/20 via-accent-orange/20 to-accent-purple/20 border border-accent-purple/40 text-white text-xs font-semibold shadow-lg">
+          <Sparkles size={15} className="text-accent-orange animate-pulse" />
+          <span>🔥 <strong>15 Dias de Teste Grátis</strong> para qualquer plano pago • <strong>Sem cartão de crédito</strong> • Plano Gratuito Vitalício</span>
+        </div>
+
         {/* Toggles: Ciclo (Mensal / Trimestral) + Moeda (BRL / USD) */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
           {/* Ciclo Toggle */}

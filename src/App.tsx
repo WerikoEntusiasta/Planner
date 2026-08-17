@@ -32,6 +32,10 @@ import ReferenceHubModal from './components/ReferenceHubModal';
 import CarouselAICreatorModal from './components/CarouselAICreatorModal';
 import PostEditorView from './components/PostEditorView';
 import StrategicMetricsRow from './components/StrategicMetricsRow';
+import TrialStatusBanner from './components/TrialStatusBanner';
+import TrialExpiredModal from './components/TrialExpiredModal';
+import PricingModal from './components/PricingModal';
+import { getUserTrialStatus } from './utils/trialUtils';
 import SeoRouter from './seo/SeoRouter';
 import { Sparkles, BarChart2, Calendar as CalendarIcon, Target, Plus, Heart, HelpCircle, Shield, ChevronDown } from 'lucide-react';
 import { useSocket } from './hooks/useSocket';
@@ -134,6 +138,19 @@ export default function App() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editPostTarget, setEditPostTarget] = useState<Post | null>(null);
   const [calendarTargetDate, setCalendarTargetDate] = useState<string | undefined>(undefined);
+
+  // 15-Day Free Trial and Pricing Modal States
+  const [showTrialExpiredModal, setShowTrialExpiredModal] = useState(false);
+  const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
+  const trialStatus = getUserTrialStatus(currentUser);
+
+  const checkTrialReadOnly = (): boolean => {
+    if (trialStatus.isReadOnly) {
+      setShowTrialExpiredModal(true);
+      return true;
+    }
+    return false;
+  };
   const [showDemoNotice, setShowDemoNotice] = useState(false);
   const [openSignUpOnLanding, setOpenSignUpOnLanding] = useState(false);
   const [activeAnnouncement, setActiveAnnouncement] = useState<any | null>(null);
@@ -647,6 +664,7 @@ export default function App() {
   // Core Actions
   const handleCreateClient = (name: string) => {
     if (!currentUser || !workspaceOwnerId) return;
+    if (checkTrialReadOnly()) return;
 
     if (!checkPermission('manageClients')) {
       alert('Você não tem permissão para gerenciar marcas/clientes.');
@@ -687,6 +705,7 @@ export default function App() {
 
   const handleRenameClient = (clientId: string, newName: string) => {
     if (!currentUser) return;
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('manageClients')) {
       alert('Você não tem permissão para alterar o nome de marcas/clientes.');
       return;
@@ -697,6 +716,7 @@ export default function App() {
 
   const handleSavePost = (savedPost: Post) => {
     if (!currentUser || !workspaceOwnerId) return;
+    if (checkTrialReadOnly()) return;
 
     const exists = posts.some((p) => p.id === savedPost.id);
     if (exists) {
@@ -726,6 +746,7 @@ export default function App() {
   };
 
   const handleDeletePost = (id: string) => {
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('deleteCards')) {
       alert('Você não tem permissão para apagar cards de conteúdo.');
       return;
@@ -736,6 +757,7 @@ export default function App() {
 
   const handleDuplicatePost = (post: Post) => {
     if (!currentUser || !workspaceOwnerId) return;
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('createCards')) {
       alert('Você não tem permissão para criar/duplicar cards de conteúdo.');
       return;
@@ -753,6 +775,7 @@ export default function App() {
   };
 
   const handleUpdateStatus = (id: string, newStatus: PostStatus) => {
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('editCards')) {
       alert('Você não tem permissão para editar/mover cards de conteúdo.');
       return;
@@ -762,6 +785,7 @@ export default function App() {
   };
 
   const handleToggleGoal = (id: string) => {
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('editCards')) {
       alert('Você não tem permissão para editar metas semanais.');
       return;
@@ -772,6 +796,7 @@ export default function App() {
 
   const handleAddGoal = (title: string, platform: Platform) => {
     if (!currentUser || !workspaceOwnerId) return;
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('createCards')) {
       alert('Você não tem permissão para criar novas metas.');
       return;
@@ -793,6 +818,7 @@ export default function App() {
   // Instant Idea Inserter from Seeder Sidebar
   const handleAddQuickPost = (platform: Platform, format: ContentFormat, titleStr: string) => {
     if (!currentUser || !workspaceOwnerId) return;
+    if (checkTrialReadOnly()) return;
     if (!checkPermission('createCards')) {
       alert('Você não tem permissão para criar novos cards.');
       return;
@@ -822,6 +848,7 @@ export default function App() {
 
   // Triggers full-page editor view from top buttons
   const handleOpenCreateDialog = () => {
+    if (checkTrialReadOnly()) return;
     setEditPostTarget(null);
     setCalendarTargetDate(undefined);
     setActiveView('editor');
@@ -829,6 +856,7 @@ export default function App() {
 
   // Triggers full-page editor view with selected date relative from calendar click
   const handleAddPostToSpecificDate = (dateStr: string) => {
+    if (checkTrialReadOnly()) return;
     setEditPostTarget(null);
     setCalendarTargetDate(dateStr);
     setActiveView('editor');
@@ -1019,9 +1047,21 @@ export default function App() {
             initialDate={calendarTargetDate}
             clientId={activeClientId}
             clientName={userClients.find(c => c.id === activeClientId)?.name || 'Cliente'}
+            readOnly={trialStatus.isReadOnly}
+            onOpenPricing={() => setIsPricingModalOpen(true)}
           />
         ) : (
           <>
+
+        {/* 15 Days Free Trial / Expiration Banner */}
+        <TrialStatusBanner
+          trialStatus={trialStatus}
+          currentUser={currentUser}
+          clients={clients}
+          posts={posts}
+          goals={goals}
+          onOpenPricingModal={() => setIsPricingModalOpen(true)}
+        />
 
         {/* Global Announcement Banner (Broadcast) */}
         {activeAnnouncement && !dismissedAnnouncement && (
@@ -1422,6 +1462,32 @@ export default function App() {
           onClose={() => setIsReferenceHubModalOpen(false)}
           clientId={activeClientId}
           clientName={userClients.find(c => c.id === activeClientId)?.name || 'Cliente'}
+        />
+
+        {/* 15 Days Free Trial Expired Warning & Data Export Modal */}
+        <TrialExpiredModal
+          isOpen={showTrialExpiredModal}
+          onClose={() => setShowTrialExpiredModal(false)}
+          currentUser={currentUser}
+          clients={clients}
+          posts={posts}
+          goals={goals}
+          onOpenPricing={() => {
+            setShowTrialExpiredModal(false);
+            setIsPricingModalOpen(true);
+          }}
+          trialStatus={trialStatus}
+        />
+
+        {/* Dedicated Pricing & Stripe Checkout Modal */}
+        <PricingModal
+          isOpen={isPricingModalOpen}
+          onClose={() => setIsPricingModalOpen(false)}
+          currentUser={currentUser}
+          onPlanUpdated={(newPlan) => {
+            handleUpdateUserPlan(newPlan);
+            setIsPricingModalOpen(false);
+          }}
         />
 
 

@@ -17,6 +17,8 @@ interface PostEditorViewProps {
   initialDate?: string;
   clientId: string;
   clientName: string;
+  readOnly?: boolean;
+  onOpenPricing?: () => void;
 }
 
 export default function PostEditorView({
@@ -26,7 +28,9 @@ export default function PostEditorView({
   postToEdit,
   initialDate,
   clientId,
-  clientName
+  clientName,
+  readOnly,
+  onOpenPricing
 }: PostEditorViewProps) {
   const { t } = useLanguage();
   const [title, setTitle] = useState('');
@@ -481,14 +485,24 @@ export default function PostEditorView({
                 onClick={onBack}
                 className="px-5 py-2.5 rounded-xl bg-panel-card border border-panel-border text-zinc-300 hover:text-white text-xs font-bold transition-all cursor-pointer"
               >
-                Cancelar
+                {readOnly ? 'Voltar' : 'Cancelar'}
               </button>
-              <button
-                type="submit"
-                className={`px-8 py-3 rounded-xl font-display font-bold text-sm transition-all shadow-lg cursor-pointer ${colors.btn}`}
-              >
-                {postToEdit ? 'Atualizar no Calendário' : 'Salvar no Calendário'}
-              </button>
+              {readOnly ? (
+                <button
+                  type="button"
+                  onClick={onOpenPricing}
+                  className="px-8 py-3 rounded-xl font-display font-bold text-sm bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-95 transition-all shadow-lg cursor-pointer"
+                >
+                  🔒 Ativar Plano para Salvar
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className={`px-8 py-3 rounded-xl font-display font-bold text-sm transition-all shadow-lg cursor-pointer ${colors.btn}`}
+                >
+                  {postToEdit ? 'Atualizar no Calendário' : 'Salvar no Calendário'}
+                </button>
+              )}
             </div>
           </div>
 

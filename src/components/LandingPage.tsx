@@ -405,6 +405,12 @@ export default function LandingPage({
 
       // 1. Try server-side registration first
       try {
+        const planToRegister = isInvitee ? 'free' : selectedPlan;
+        const now = new Date();
+        const trialStart = planToRegister === 'free' ? undefined : now.toISOString();
+        const trialEnd = planToRegister === 'free' ? undefined : new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
+        const isPaidUser = isInvitee || planToRegister === 'free';
+
         const response = await fetch('/api/auth/register', {
           method: 'POST',
           headers: {
@@ -414,7 +420,8 @@ export default function LandingPage({
             name: name.trim(),
             email: inputEmail,
             phone: phone.trim(),
-            password: password
+            password: password,
+            plan: planToRegister
           })
         });
 
@@ -426,7 +433,10 @@ export default function LandingPage({
             billingCycle: isInvitee ? undefined : (selectedPlan === 'free' ? 'monthly' : selectedBillingCycle),
             isTeamMember: isInvitee ? true : undefined,
             invitedByUserId: hostId,
-            permissions: permissionsObj
+            permissions: permissionsObj,
+            trialStartDate: data.user.trialStartDate || trialStart,
+            trialEndDate: data.user.trialEndDate || trialEnd,
+            isPaid: data.user.isPaid !== undefined ? data.user.isPaid : isPaidUser
           };
 
           const updatedUsers = [...users, registeredUser];
@@ -450,18 +460,26 @@ export default function LandingPage({
       }
 
       // 2. Fallback to offline creation
+      const now = new Date();
+      const trialStart = (isInvitee || selectedPlan === 'free') ? undefined : now.toISOString();
+      const trialEnd = (isInvitee || selectedPlan === 'free') ? undefined : new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
+      const isPaidUser = isInvitee || selectedPlan === 'free';
+
       const newUser: User = {
         id: `user_${Date.now()}`,
         name: name.trim(),
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
         password: password,
-        createdAt: new Date().toISOString(),
+        createdAt: now.toISOString(),
         plan: isInvitee ? undefined : selectedPlan,
         billingCycle: isInvitee ? undefined : (selectedPlan === 'free' ? 'monthly' : selectedBillingCycle),
         isTeamMember: isInvitee ? true : undefined,
         invitedByUserId: hostId,
-        permissions: permissionsObj
+        permissions: permissionsObj,
+        trialStartDate: trialStart,
+        trialEndDate: trialEnd,
+        isPaid: isPaidUser
       };
 
       const updatedUsers = [...users, newUser];
@@ -1723,12 +1741,15 @@ export default function LandingPage({
                       onChange={(e) => setSelectedPlan(e.target.value as any)}
                       className="w-full bg-zinc-900/80 border border-panel-border hover:border-zinc-700 focus:border-accent-purple rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition-all cursor-pointer"
                     >
-                      <option value="free">{t('optFreePlan', 'Plano Gratuito (R$ 0 - Até 2 Clientes & 1 Membro)')}</option>
-                      <option value="starter">{t('optStarterPlan', 'Plano Starter (R$ 14,99 - Até 4 Clientes & 2 Membros)')}</option>
-                      <option value="basic">{t('optBasicPlan', 'Plano Basic (R$ 29,00 - Até 8 Clientes & 3 Membros)')}</option>
-                      <option value="pro">{t('optProPlan', 'Plano Pro (R$ 49,00 - Até 14 Clientes & 5 Membros)')}</option>
-                      <option value="growth">{t('optGrowthPlan', 'Plano Growth PRO (R$ 79,00 - Até 25 Clientes & 8 Membros)')}</option>
+                      <option value="free">Plano Gratuito • Vitalício (Até 2 Marcas)</option>
+                      <option value="starter">Plano Starter • 15 Dias Grátis sem cartão (Até 4 Marcas)</option>
+                      <option value="basic">Plano Basic • 15 Dias Grátis sem cartão (Até 8 Marcas + IA)</option>
+                      <option value="pro">Plano Pro • 15 Dias Grátis sem cartão (Até 14 Marcas + IA Total)</option>
+                      <option value="growth">Plano Growth PRO • 15 Dias Grátis sem cartão (Até 25 Marcas)</option>
                     </select>
+                    <p className="text-[10px] text-accent-orange font-mono">
+                      🔥 15 dias de teste grátis sem cartão de crédito em qualquer plano pago.
+                    </p>
                   </div>
                 )}
 

@@ -379,9 +379,16 @@ function initDatabase() {
       isTeamMember INTEGER DEFAULT 0,
       invitedByUserId TEXT,
       permissions TEXT,
-      affiliate_code TEXT UNIQUE
+      affiliate_code TEXT UNIQUE,
+      trialStartDate TEXT,
+      trialEndDate TEXT,
+      isPaid INTEGER DEFAULT 0
     )
   `).run();
+
+  try { db.exec("ALTER TABLE users ADD COLUMN trialStartDate TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE users ADD COLUMN trialEndDate TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE users ADD COLUMN isPaid INTEGER DEFAULT 0"); } catch (e) {}
 
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_affiliate_code ON users(affiliate_code)').run();
 
@@ -577,9 +584,9 @@ try {
 
 // --- API Endpoints ---
 
-// 1. Auth Endpoint: Register Account (LGPD Compliant with Consent)
+// 1. Auth Endpoint: Register Account (LGPD Compliant with Consent & 15-day trial)
 app.post('/api/auth/register', async (req, res) => {
-  const { name, email, phone, password } = req.body;
+  const { name, email, phone, password, plan } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ success: false, error: 'Por favor, preencha todos os campos obrigatórios.' });
@@ -601,7 +608,23 @@ app.post('/api/auth/register', async (req, res) => {
 
     const userId = `user_${Date.now()}`;
     const createdAt = new Date().toISOString();
-    const defaultPlan = 'gratis';
+    
+    // Determine plan and 15-day trial logic
+    const assignedPlan = (plan && ['starter', 'basic', 'pro', 'growth'].includes(plan)) ? plan : 'free';
+    const now = new Date();
+    let trialStartDate: string | null = null;
+    let trialEndDate: string | null = null;
+    let isPaid = 0;
+
+    if (assignedPlan === 'free') {
+      // Free plan is lifetime (vitalício)
+      isPaid = 1;
+    } else {
+      // 15 days free trial for paid plans without credit card
+      trialStartDate = now.toISOString();
+      trialEndDate = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
+      isPaid = 0;
+    }
     
     // Affiliate logic
     const affiliateCode = `ref_${name.trim().toLowerCase().replace(/\s+/g, '')}_${crypto.randomBytes(3).toString('hex')}`;
@@ -616,8 +639,8 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     db.prepare(`
-      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, affiliate_code)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, affiliate_code, trialStartDate, trialEndDate, isPaid)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       userId,
       name.trim(),
@@ -625,11 +648,14 @@ app.post('/api/auth/register', async (req, res) => {
       phone ? phone.trim() : null,
       await hashPassword(password),
       createdAt,
-      defaultPlan,
+      assignedPlan,
       0, // isTeamMember false
       invitedByUserId,
       null, // permissions null
-      affiliateCode
+      affiliateCode,
+      trialStartDate,
+      trialEndDate,
+      isPaid
     );
 
     const newUser = {
@@ -638,8 +664,11 @@ app.post('/api/auth/register', async (req, res) => {
       email: email.trim().toLowerCase(),
       phone: phone ? phone.trim() : '',
       createdAt,
-      plan: defaultPlan,
-      isTeamMember: false
+      plan: assignedPlan,
+      isTeamMember: false,
+      trialStartDate,
+      trialEndDate,
+      isPaid: isPaid === 1
     };
 
     res.json({ success: true, user: newUser });
@@ -684,6 +713,7 @@ app.post('/api/auth/login', async (req, res) => {
           name: 'Administrador (SaaS Owner)',
           email: envAdminEmail,
           plan: 'growth',
+          isPaid: true,
           isTeamMember: false,
           permissions: {
             createCards: true,
@@ -709,12 +739,45 @@ app.post('/api/auth/login', async (req, res) => {
     const parsedUser = {
       ...user,
       isTeamMember: user.isTeamMember === 1,
+      isPaid: user.isPaid === 1,
       permissions: user.permissions ? JSON.parse(user.permissions) : undefined
     };
 
     res.json({ success: true, user: parsedUser });
   } catch (err: any) {
     console.error('Error in /api/auth/login:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint to start a 15-day free trial for a paid plan without a credit card
+app.post('/api/user/start-trial', (req, res) => {
+  const { userId, plan } = req.body;
+  if (!userId || !plan) {
+    return res.status(400).json({ success: false, error: 'userId e plan são obrigatórios.' });
+  }
+
+  const targetPlan = ['starter', 'basic', 'pro', 'growth'].includes(plan) ? plan : 'pro';
+  const now = new Date();
+  const trialStartDate = now.toISOString();
+  const trialEndDate = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    db.prepare(`
+      UPDATE users 
+      SET plan = ?, trialStartDate = ?, trialEndDate = ?, isPaid = 0 
+      WHERE id = ?
+    `).run(targetPlan, trialStartDate, trialEndDate, userId);
+
+    res.json({
+      success: true,
+      plan: targetPlan,
+      trialStartDate,
+      trialEndDate,
+      isPaid: false
+    });
+  } catch (err: any) {
+    console.error('Error in /api/user/start-trial:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -806,6 +869,7 @@ app.get('/api/data', (req, res) => {
     const users = db.prepare('SELECT * FROM users WHERE id = ? OR invitedByUserId = ?').all(workspaceOwnerId, workspaceOwnerId).map((u: any) => ({
       ...u,
       isTeamMember: u.isTeamMember === 1,
+      isPaid: u.isPaid === 1,
       permissions: u.permissions ? JSON.parse(u.permissions) : undefined
     }));
 
@@ -910,8 +974,8 @@ app.post('/api/sync', (req, res) => {
         db.prepare('DELETE FROM users WHERE invitedByUserId = ?').run(workspaceOwnerId);
         
         const insertUser = db.prepare(`
-          INSERT OR REPLACE INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT OR REPLACE INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, trialStartDate, trialEndDate, isPaid)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const u of users) {
@@ -926,7 +990,10 @@ app.post('/api/sync', (req, res) => {
               u.plan || null,
               0, // owner
               null,
-              null
+              null,
+              u.trialStartDate || null,
+              u.trialEndDate || null,
+              u.isPaid ? 1 : 0
             );
           } else if (u.invitedByUserId === workspaceOwnerId) {
             insertUser.run(
@@ -939,7 +1006,10 @@ app.post('/api/sync', (req, res) => {
               u.plan || null,
               1, // isTeamMember true
               workspaceOwnerId,
-              u.permissions ? JSON.stringify(u.permissions) : null
+              u.permissions ? JSON.stringify(u.permissions) : null,
+              u.trialStartDate || null,
+              u.trialEndDate || null,
+              u.isPaid ? 1 : 0
             );
           }
         }
@@ -2489,9 +2559,9 @@ app.get('/api/stripe/session-status', async (req, res) => {
 
       try {
         if (userId) {
-          db.prepare('UPDATE users SET plan = ? WHERE id = ?').run(plan, userId);
+          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, userId);
         } else if (userEmail) {
-          db.prepare('UPDATE users SET plan = ? WHERE email = ?').run(plan, userEmail);
+          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE email = ?').run(plan, userEmail);
         }
       } catch (dbErr) {
         console.error('[Stripe] Erro ao sincronizar plano no SQLite após checkout:', dbErr);
@@ -2601,15 +2671,15 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         console.log(`[Stripe] Pagamento confirmado: ${userEmail || userId || 'Cliente'} - Plano ${plan}`);
         
         if (userId) {
-          db.prepare('UPDATE users SET plan = ? WHERE id = ?').run(plan, userId);
+          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, userId);
         }
         if (userEmail) {
           const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(userEmail) as any;
           if (user) {
-            db.prepare('UPDATE users SET plan = ? WHERE id = ?').run(plan, user.id);
-            console.log(`[Stripe] Plano ${plan} ativado para usuário ${user.id}`);
+            db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, user.id);
+            console.log(`[Stripe] Plano ${plan} ativado para usuário ${user.id} (isPaid: 1)`);
           } else {
-            db.prepare('UPDATE users SET plan = ? WHERE LOWER(email) = LOWER(?)').run(plan, userEmail);
+            db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, userEmail);
           }
         }
         break;
@@ -2630,14 +2700,14 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
           }
           const userEmail = subscription?.customer_email;
           if (userEmail) {
-            db.prepare('UPDATE users SET plan = ? WHERE email = ?').run(plan, userEmail);
-            console.log(`[Stripe Webhook] Assinatura ativa para ${userEmail} (Plano: ${plan})`);
+            db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, userEmail);
+            console.log(`[Stripe Webhook] Assinatura ativa para ${userEmail} (Plano: ${plan}, isPaid: 1)`);
           }
         } else if (status === 'unpaid' || status === 'canceled' || status === 'past_due') {
           console.warn(`[Stripe Webhook] Subscription status: ${status} para ${subscription?.customer_email}`);
           const userEmail = subscription?.customer_email;
           if (userEmail && status === 'canceled') {
-            db.prepare('UPDATE users SET plan = ? WHERE email = ?').run('free', userEmail);
+            db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE LOWER(email) = LOWER(?)').run('free', userEmail);
             console.log(`[Stripe Webhook] Assinatura cancelada/expirada para ${userEmail}, revertido para free.`);
           }
         }
@@ -2649,7 +2719,7 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         const customerEmail = subscription?.customer_email;
         if (customerEmail) {
           console.log(`[Stripe Webhook] Assinatura cancelada para ${customerEmail}, revertendo para plano free.`);
-          db.prepare('UPDATE users SET plan = ? WHERE email = ?').run('free', customerEmail);
+          db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE LOWER(email) = LOWER(?)').run('free', customerEmail);
         }
         break;
       }
@@ -2658,8 +2728,8 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         const invoice = event.data?.object;
         const customerEmail = invoice?.customer_email;
         const amountPaid = invoice?.amount_paid;
-        const plan = invoice?.lines?.data[0]?.metadata?.plan || 'pro';
-        const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(customerEmail) as any;
+        const user = db.prepare('SELECT id, plan FROM users WHERE LOWER(email) = LOWER(?)').get(customerEmail) as any;
+        const plan = invoice?.lines?.data[0]?.metadata?.plan || user?.plan || 'subscription';
         
         if(user) {
           db.prepare(`INSERT INTO payment_history (id, userId, stripePaymentIntentId, amount, currency, status, plan, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(

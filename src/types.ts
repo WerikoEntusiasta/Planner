@@ -35,6 +35,10 @@ export interface User {
     deleteCards?: boolean;
     manageClients?: boolean;
   };
+  // 15 days free trial fields
+  trialStartDate?: string;
+  trialEndDate?: string;
+  isPaid?: boolean;
 }
 
 export interface Client {
