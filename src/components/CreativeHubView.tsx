@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Creative, CreativeAsset, CreativeFormat, CreativeStatus, Client, User } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
 import { 
   Sparkles, Plus, Image as ImageIcon, Film, LayoutGrid, Check, 
   X, MessageSquare, Send, Copy, ExternalLink, Trash2, Edit3, 
@@ -340,13 +341,14 @@ export default function CreativeHubView({
   };
 
   // Copy Client Approval Link
-  const handleCopyLink = (shareToken: string) => {
+  const handleCopyLink = async (shareToken: string) => {
     const origin = window.location.origin;
     const approvalUrl = `${origin}/aprovar?creativeToken=${shareToken}`;
-    navigator.clipboard.writeText(approvalUrl).then(() => {
+    const success = await copyToClipboard(approvalUrl);
+    if (success) {
       setCopiedToken(shareToken);
       setTimeout(() => setCopiedToken(null), 3000);
-    });
+    }
   };
 
   // Open WhatsApp with direct approval message
@@ -1033,11 +1035,13 @@ export default function CreativeHubView({
 
             <div className="flex items-center gap-3">
               <button
-                onClick={() => {
+                onClick={async () => {
                   const url = `${window.location.origin}/aprovar?creativeToken=${previewingShareToken}`;
-                  navigator.clipboard.writeText(url);
-                  setCopiedToken(previewingShareToken);
-                  setTimeout(() => setCopiedToken(null), 3000);
+                  const success = await copyToClipboard(url);
+                  if (success) {
+                    setCopiedToken(previewingShareToken);
+                    setTimeout(() => setCopiedToken(null), 3000);
+                  }
                 }}
                 className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 hover:text-white flex items-center gap-1.5 cursor-pointer"
               >

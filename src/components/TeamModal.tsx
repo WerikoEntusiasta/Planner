@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { User } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLanguage } from '../i18n/LanguageContext';
+import { copyToClipboard } from '../utils/clipboard';
 import { 
   Users, 
   Sparkles, 
@@ -75,10 +76,12 @@ export default function TeamModal({
     `&delete=${invitePerms.deleteCards}` +
     `&manage=${invitePerms.manageClients}`;
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(inviteLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyLink = async () => {
+    const success = await copyToClipboard(inviteLink);
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const handleTogglePermission = (member: User, field: keyof NonNullable<User['permissions']>) => {

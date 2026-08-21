@@ -228,22 +228,17 @@ export default function LandingPage({
 
   // Check URL/hash for team invitation and parse pre-configured permissions
   React.useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    let inviteId = params.get('invite');
-    if (!inviteId) {
-      const hash = window.location.hash;
-      if (hash && hash.includes('invite=')) {
-        inviteId = hash.split('invite=')[1]?.split('&')[0];
+    const checkInvite = async () => {
+      const params = new URLSearchParams(window.location.search);
+      let inviteId = params.get('invite');
+      if (!inviteId) {
+        const hash = window.location.hash;
+        if (hash && hash.includes('invite=')) {
+          inviteId = hash.split('invite=')[1]?.split('&')[0];
+        }
       }
-    }
 
-    if (inviteId) {
-      const users = getRegisteredUsers();
-      const host = users.find(u => u.id === inviteId);
-      if (host) {
-        setInvitedByHostId(host.id);
-        setInvitedByHostName(host.name);
-        
+      if (inviteId) {
         // Parse permissions from invite URL if present, defaulting to true
         const canCreate = params.get('create') !== 'false';
         const canEdit = params.get('edit') !== 'false';
@@ -257,16 +252,48 @@ export default function LandingPage({
           manageClients: canManage
         });
 
-        setIsLoginTab(false); // Go to signup
-        setIsAuthOpen(true); // Open modal
+        // Try local storage first
+        const users = getRegisteredUsers();
+        const localHost = users.find(u => u.id === inviteId);
+        if (localHost) {
+          setInvitedByHostId(localHost.id);
+          setInvitedByHostName(localHost.name);
+          setIsLoginTab(false); // Go directly to signup
+          setIsAuthOpen(true); // Open modal automatically
+        } else {
+          // If not in localStorage (e.g. opened in different browser or incognito), fetch from server
+          try {
+            const res = await fetch(`/api/auth/invite-info/${encodeURIComponent(inviteId)}`);
+            const data = await res.json();
+            if (res.ok && data.success && data.host) {
+              setInvitedByHostId(data.host.id);
+              setInvitedByHostName(data.host.name);
+              setIsLoginTab(false); // Go directly to signup
+              setIsAuthOpen(true); // Open modal automatically
+            } else {
+              // Fallback with just the ID
+              setInvitedByHostId(inviteId);
+              setInvitedByHostName('Administrador');
+              setIsLoginTab(false);
+              setIsAuthOpen(true);
+            }
+          } catch (e) {
+            setInvitedByHostId(inviteId);
+            setInvitedByHostName('Administrador');
+            setIsLoginTab(false);
+            setIsAuthOpen(true);
+          }
+        }
+      } else if (params.get('signup') === 'true' || params.get('register') === 'true' || params.get('tab') === 'register' || params.get('tab') === 'signup') {
+        setIsLoginTab(false);
+        setIsAuthOpen(true);
+      } else if (params.get('auth') === 'open' || params.get('login') === 'true') {
+        setIsLoginTab(true);
+        setIsAuthOpen(true);
       }
-    } else if (params.get('signup') === 'true' || params.get('register') === 'true' || params.get('tab') === 'register' || params.get('tab') === 'signup') {
-      setIsLoginTab(false);
-      setIsAuthOpen(true);
-    } else if (params.get('auth') === 'open' || params.get('login') === 'true') {
-      setIsLoginTab(true);
-      setIsAuthOpen(true);
-    }
+    };
+
+    checkInvite();
   }, []);
 
   // Read registered users from local storage
@@ -401,12 +428,9 @@ export default function LandingPage({
       let permissionsObj = undefined;
 
       if (invitedByHostId) {
-        const host = users.find(u => u.id === invitedByHostId);
-        if (host) {
-          isInvitee = true;
-          hostId = host.id;
-          permissionsObj = invitePermissions; // Use the configured permissions from the invite URL
-        }
+        isInvitee = true;
+        hostId = invitedByHostId;
+        permissionsObj = invitePermissions; // Use the configured permissions from the invite URL
       }
 
       // 1. Try server-side registration first
@@ -427,7 +451,10 @@ export default function LandingPage({
             email: inputEmail,
             phone: phone.trim(),
             password: password,
-            plan: planToRegister
+            plan: planToRegister,
+            isTeamMember: isInvitee,
+            invitedByUserId: hostId,
+            permissions: permissionsObj
           })
         });
 

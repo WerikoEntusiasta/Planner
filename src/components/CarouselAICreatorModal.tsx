@@ -6,6 +6,7 @@ import { Post, Platform, ContentFormat } from '../types';
 import AIQuotaBadge from './AIQuotaBadge';
 import AILimitModal from './AILimitModal';
 import { checkAIQuota, consumeAIQuota, AIQuotaStatus } from '../services/aiUsageService';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface CarouselAICreatorModalProps {
   isOpen?: boolean;
@@ -406,10 +407,12 @@ export default function CarouselAICreatorModal({
     }, 800);
   };
 
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyCode = async (code: string) => {
+    const success = await copyToClipboard(code);
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const handleDownloadSlide = async () => {

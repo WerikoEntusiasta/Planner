@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, Post, Client, SupportTicket, Coupon, Announcement, AuditLog, AdminUserItem } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
 import { 
   Shield, Eye, Users, Layers, LayoutGrid, LogOut, ArrowLeft, Plus, Smartphone, Trash2, 
   CheckCircle2, Terminal, RefreshCw, BarChart2, MessageSquare, LifeBuoy, CreditCard, 
@@ -483,12 +484,14 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
     }
   };
 
-  const copyPromoLink = (code: string) => {
+  const copyPromoLink = async (code: string) => {
     const origin = window.location.origin;
     const url = `${origin}/?cupom=${encodeURIComponent(code)}`;
-    navigator.clipboard.writeText(url);
-    setCopiedCouponLink(code);
-    setTimeout(() => setCopiedCouponLink(null), 2500);
+    const success = await copyToClipboard(url);
+    if (success) {
+      setCopiedCouponLink(code);
+      setTimeout(() => setCopiedCouponLink(null), 2500);
+    }
   };
 
   // Support Tickets Actions
@@ -1437,11 +1440,13 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
                     <span className="text-xs font-bold text-zinc-200">Endpoint para Webhooks no Stripe:</span>
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={async () => {
                         const url = `${window.location.origin}/api/stripe/webhook`;
-                        navigator.clipboard.writeText(url);
-                        setCopiedWebhookUrl(true);
-                        setTimeout(() => setCopiedWebhookUrl(false), 2000);
+                        const success = await copyToClipboard(url);
+                        if (success) {
+                          setCopiedWebhookUrl(true);
+                          setTimeout(() => setCopiedWebhookUrl(false), 2000);
+                        }
                       }}
                       className="text-[11px] text-accent-purple hover:underline font-semibold flex items-center gap-1 cursor-pointer"
                     >

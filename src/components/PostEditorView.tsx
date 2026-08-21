@@ -7,7 +7,8 @@ import React, { useState, useEffect } from 'react';
 import { Post, Platform, ContentFormat, FunnelStage, PostStatus } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import { getTranslatedPost } from '../utils/postTranslations';
-import { ArrowLeft, Sparkles, Calendar, Clock, Hash, FileText, Layers, CheckCircle2, Trash2, Link as LinkIcon } from 'lucide-react';
+import { ArrowLeft, Sparkles, Calendar, Clock, Hash, FileText, Layers, CheckCircle2, Trash2, Link as LinkIcon, Check } from 'lucide-react';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface PostEditorViewProps {
   onBack: () => void;
@@ -444,11 +445,11 @@ export default function PostEditorView({
                 <button
                   type="button"
                   onClick={async () => {
-                    const approveLink = `${window.location.origin}/approve/${postToEdit.id}`;
-                    try {
-                      await navigator.clipboard.writeText(approveLink);
-                      alert('Link de aprovação copiado para a área de transferência!');
-                    } catch (err) {
+                    const approveLink = `${window.location.origin}/?approvePostId=${postToEdit.id}`;
+                    const success = await copyToClipboard(approveLink);
+                    if (success) {
+                      alert('Link de aprovação copiado com sucesso!');
+                    } else {
                       prompt('Copie o link de aprovação:', approveLink);
                     }
                   }}

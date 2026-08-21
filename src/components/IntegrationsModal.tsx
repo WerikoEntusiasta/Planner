@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { Sparkles, Facebook, Instagram, ShieldCheck, HelpCircle, Copy, Check, Trash2, X, RefreshCw, KeyRound, Globe, ExternalLink, Settings, AlertTriangle } from 'lucide-react';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface ConnectedAccount {
   id: string;
@@ -157,17 +158,19 @@ export default function IntegrationsModal({ isOpen, onClose, userId, userEmail }
     }
   };
 
-  const handleCopy = (text: string, type: 'dev' | 'shared' | 'current') => {
-    navigator.clipboard.writeText(text);
-    if (type === 'dev') {
-      setCopiedDev(true);
-      setTimeout(() => setCopiedDev(false), 2000);
-    } else if (type === 'shared') {
-      setCopiedShared(true);
-      setTimeout(() => setCopiedShared(false), 2000);
-    } else if (type === 'current') {
-      setCopiedCurrent(true);
-      setTimeout(() => setCopiedCurrent(false), 2000);
+  const handleCopy = async (text: string, type: 'dev' | 'shared' | 'current') => {
+    const success = await copyToClipboard(text);
+    if (success) {
+      if (type === 'dev') {
+        setCopiedDev(true);
+        setTimeout(() => setCopiedDev(false), 2000);
+      } else if (type === 'shared') {
+        setCopiedShared(true);
+        setTimeout(() => setCopiedShared(false), 2000);
+      } else if (type === 'current') {
+        setCopiedCurrent(true);
+        setTimeout(() => setCopiedCurrent(false), 2000);
+      }
     }
   };
 

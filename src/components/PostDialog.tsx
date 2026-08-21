@@ -8,6 +8,7 @@ import { Post, Platform, ContentFormat, FunnelStage, PostStatus } from '../types
 import { useLanguage } from '../i18n/LanguageContext';
 import { getTranslatedPost, getTranslatedFormat, getTranslatedStage, getTranslatedStatus } from '../utils/postTranslations';
 import { X, Sparkles, AlertCircle, CheckCircle, Calendar, Clock, Hash, FileText, Layers, Video } from 'lucide-react';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface PostDialogProps {
   isOpen: boolean;
@@ -391,24 +392,7 @@ export default function PostDialog({
                   type="button"
                   onClick={async () => {
                     const approveLink = `${window.location.origin}${window.location.pathname}?approvePostId=${postToEdit.id}`;
-                    
-                    try {
-                      await navigator.clipboard.writeText(approveLink);
-                    } catch (err) {
-                      console.error('Failed to copy: ', err);
-                      const textArea = document.createElement("textarea");
-                      textArea.value = approveLink;
-                      document.body.appendChild(textArea);
-                      textArea.select();
-                      try {
-                        document.execCommand('copy');
-                      } catch (fallbackErr) {
-                        alert('Erro ao copiar link. Por favor, copie manualmente: ' + approveLink);
-                        document.body.removeChild(textArea);
-                        return;
-                      }
-                      document.body.removeChild(textArea);
-                    }
+                    await copyToClipboard(approveLink);
                     
                     onSave({
                       ...postToEdit,

@@ -882,12 +882,30 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     // Affiliate logic
     const affiliateCode = `ref_${name.trim().toLowerCase().replace(/\s+/g, '')}_${crypto.randomBytes(3).toString('hex')}`;
     let invitedByUserId = null;
-    const affiliateCodeFromCookie = req.cookies?.affiliate_code;
-    
-    if (affiliateCodeFromCookie) {
-      const referrer = db.prepare('SELECT id FROM users WHERE affiliate_code = ?').get(affiliateCodeFromCookie);
-      if (referrer) {
-        invitedByUserId = (referrer as any).id;
+    let isTeamMember = 0;
+    let permissionsStr: string | null = null;
+
+    // Check if registering as team member via invite
+    const { isTeamMember: reqIsTeamMember, invitedByUserId: reqHostId, permissions: reqPermissions } = req.body;
+    if (reqIsTeamMember && reqHostId) {
+      const hostUser = db.prepare('SELECT id, plan FROM users WHERE id = ?').get(reqHostId) as any;
+      if (hostUser) {
+        isTeamMember = 1;
+        invitedByUserId = hostUser.id;
+        permissionsStr = reqPermissions ? JSON.stringify(reqPermissions) : null;
+        isPaid = 1; // Team members inherit access
+        trialStartDate = null;
+        trialEndDate = null;
+      }
+    }
+
+    if (!invitedByUserId) {
+      const affiliateCodeFromCookie = req.cookies?.affiliate_code;
+      if (affiliateCodeFromCookie) {
+        const referrer = db.prepare('SELECT id FROM users WHERE affiliate_code = ?').get(affiliateCodeFromCookie);
+        if (referrer) {
+          invitedByUserId = (referrer as any).id;
+        }
       }
     }
 
@@ -901,10 +919,10 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
       phone ? phone.trim() : null,
       await hashPassword(password),
       createdAt,
-      assignedPlan,
-      0, // isTeamMember false
+      isTeamMember ? 'free' : assignedPlan,
+      isTeamMember,
       invitedByUserId,
-      null, // permissions null
+      permissionsStr,
       affiliateCode,
       trialStartDate,
       trialEndDate,
@@ -919,8 +937,10 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
       email: email.trim().toLowerCase(),
       phone: phone ? phone.trim() : '',
       createdAt,
-      plan: assignedPlan,
-      isTeamMember: false,
+      plan: isTeamMember ? undefined : assignedPlan,
+      isTeamMember: isTeamMember === 1,
+      invitedByUserId: invitedByUserId || undefined,
+      permissions: permissionsStr ? JSON.parse(permissionsStr) : undefined,
       trialStartDate,
       trialEndDate,
       isPaid: isPaid === 1
@@ -929,6 +949,31 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     res.json({ success: true, user: newUser, token: userToken });
   } catch (err: any) {
     console.error('Error in /api/auth/register:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint to validate and fetch host user for an invite link
+app.get('/api/auth/invite-info/:hostId', async (req, res) => {
+  const { hostId } = req.params;
+  if (!hostId) {
+    return res.status(400).json({ success: false, error: 'ID do anfitrião inválido' });
+  }
+
+  try {
+    const host = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(hostId) as any;
+    if (!host) {
+      return res.status(404).json({ success: false, error: 'Anfitrião do convite não encontrado.' });
+    }
+
+    res.json({
+      success: true,
+      host: {
+        id: host.id,
+        name: host.name
+      }
+    });
+  } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });

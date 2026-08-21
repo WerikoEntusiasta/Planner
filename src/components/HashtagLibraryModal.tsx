@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Hash, Copy, Check, Plus, FolderPlus, Layers, Sparkles } from 'lucide-react';
 import { HashtagGroup } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface HashtagLibraryModalProps {
   isOpen: boolean;
@@ -54,14 +55,16 @@ export default function HashtagLibraryModal({ isOpen, onClose, onSelectHashtags 
 
   if (!isOpen) return null;
 
-  const handleCopy = (group: HashtagGroup) => {
+  const handleCopy = async (group: HashtagGroup) => {
     const formatted = group.tags.map(t => `#${t.replace(/^#/, '')}`).join(' ');
-    navigator.clipboard.writeText(formatted);
-    setCopiedId(group.id);
-    if (onSelectHashtags) {
-      onSelectHashtags(group.tags);
+    const success = await copyToClipboard(formatted);
+    if (success) {
+      setCopiedId(group.id);
+      if (onSelectHashtags) {
+        onSelectHashtags(group.tags);
+      }
+      setTimeout(() => setCopiedId(null), 1800);
     }
-    setTimeout(() => setCopiedId(null), 1800);
   };
 
   const handleCreateGroup = (e: React.FormEvent) => {

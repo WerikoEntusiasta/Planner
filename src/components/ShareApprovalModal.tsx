@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Share2, Copy, Check, ExternalLink, ShieldCheck, Sparkles, MessageCircle, X } from 'lucide-react';
 import { Post, Client } from '../types';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface ShareApprovalModalProps {
   isOpen: boolean;
@@ -25,11 +26,13 @@ export default function ShareApprovalModal({
   const postApprovalUrl = currentPost ? `${origin}/?approvePostId=${currentPost.id}` : '';
   const clientName = client?.name || 'Cliente';
 
-  const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    localStorage.setItem('planner_onboarding_link_copied', 'true');
-    setTimeout(() => setCopiedId(null), 2500);
+  const handleCopy = async (text: string, id: string) => {
+    const success = await copyToClipboard(text);
+    if (success) {
+      setCopiedId(id);
+      localStorage.setItem('planner_onboarding_link_copied', 'true');
+      setTimeout(() => setCopiedId(null), 2500);
+    }
   };
 
   const whatsappMessage = encodeURIComponent(
