@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ClientCreativeApprovalPage from './ClientCreativeApprovalPage';
+import DesignerCarouselAIModal, { GeneratedCarouselData } from './DesignerCarouselAIModal';
 
 interface CreativeHubViewProps {
   clients: Client[];
@@ -40,11 +41,14 @@ export default function CreativeHubView({
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [selectedClientId, setSelectedClientId] = useState<string>(activeClientId || 'all');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [copiedGeneralLink, setCopiedGeneralLink] = useState(false);
   const [previewingShareToken, setPreviewingShareToken] = useState<string | null>(null);
+  const [previewingHubClientId, setPreviewingHubClientId] = useState<string | null>(null);
 
   // Modal State for Creating/Editing
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCreative, setEditingCreative] = useState<Creative | null>(null);
+  const [isAIModalOpen, setIsAIModalOpen] = useState(false);
 
   // Modal Form States
   const [formTitle, setFormTitle] = useState('');
@@ -129,6 +133,23 @@ export default function CreativeHubView({
     setFormPlatform(creative.platform);
     setFormAspectRatio(creative.aspectRatio || '1:1');
     setFormAssets(creative.assets || []);
+    setPreviewSlideIndex(0);
+    setUploadError(null);
+    setIsSaving(false);
+    setIsProcessingFiles(false);
+    setIsModalOpen(true);
+  };
+
+  // Handle Apply AI generated carousel into creative form
+  const handleApplyAIToCreative = (carouselData: GeneratedCarouselData) => {
+    setEditingCreative(null);
+    setFormTitle(carouselData.title || `Carrossel: ${carouselData.hook.slice(0, 40)}`);
+    setFormDescription(`${carouselData.caption}\n\n${(carouselData.hashtags || []).join(' ')}`);
+    setFormClientId(selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'default_client'));
+    setFormFormat('carousel');
+    setFormPlatform('instagram');
+    setFormAspectRatio('1:1');
+    setFormAssets([]);
     setPreviewSlideIndex(0);
     setUploadError(null);
     setIsSaving(false);
@@ -428,7 +449,7 @@ export default function CreativeHubView({
     }
   };
 
-  // Copy Client Approval Link
+  // Copy Individual Client Approval Link
   const handleCopyLink = async (shareToken: string) => {
     const origin = window.location.origin;
     const approvalUrl = `${origin}/aprovar?creativeToken=${shareToken}`;
@@ -439,7 +460,7 @@ export default function CreativeHubView({
     }
   };
 
-  // Open WhatsApp with direct approval message
+  // Open WhatsApp with direct single approval message
   const handleShareWhatsApp = (creative: Creative) => {
     const origin = window.location.origin;
     const approvalUrl = `${origin}/aprovar?creativeToken=${creative.shareToken}`;
@@ -450,9 +471,41 @@ export default function CreativeHubView({
     window.open(`https://wa.me/?text=${message}`, '_blank');
   };
 
+  // Copy General Client Approval Hub Link (All creatives in one link)
+  const handleCopyGeneralLink = async (targetClientId?: string) => {
+    const origin = window.location.origin;
+    const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
+    const hubUrl = `${origin}/aprovar?client=${resolvedClient}&mode=hub`;
+    const success = await copyToClipboard(hubUrl);
+    if (success) {
+      setCopiedGeneralLink(true);
+      setTimeout(() => setCopiedGeneralLink(false), 3000);
+    }
+  };
+
+  // Share General Client Approval Hub on WhatsApp
+  const handleShareGeneralWhatsApp = (targetClientId?: string) => {
+    const origin = window.location.origin;
+    const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
+    const clientObj = clients.find(c => c.id === resolvedClient);
+    const clientName = clientObj?.name || 'Cliente';
+    const hubUrl = `${origin}/aprovar?client=${resolvedClient}&mode=hub`;
+    const message = encodeURIComponent(
+      `Olá ${clientName}! Segue o link geral da nossa Central de Criativos para você visualizar todos os posts e carrosséis aguardando aprovação:\n\n` +
+      `🔗 ${hubUrl}\n\n` +
+      `Você pode aprovar ou solicitar ajustes com 1 clique direto pelo celular ou computador!`
+    );
+    window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
   // Open Preview as client (in-app modal or external link)
   const handleViewAsClient = (shareToken: string) => {
     setPreviewingShareToken(shareToken);
+  };
+
+  const handlePreviewGeneralHub = (targetClientId?: string) => {
+    const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
+    setPreviewingHubClientId(resolvedClient);
   };
 
   // Filtered creatives list
@@ -477,80 +530,145 @@ export default function CreativeHubView({
   const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
   const approvalRate = totalCount > 0 ? Math.round((approvedCount / totalCount) * 100) : 0;
 
+  const currentSelectedClientObj = clients.find(c => c.id === selectedClientId);
+
   return (
     <div className="space-y-6 animate-fade-in font-sans">
       
       {/* 1. HERO HEADER WITH STATS & CTA */}
-      <div className="p-6 md:p-8 bg-gradient-to-r from-purple-950/40 via-[#161622] to-orange-950/30 rounded-3xl border border-purple-500/20 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-purple-600/10 via-orange-500/5 to-transparent rounded-full blur-3xl pointer-events-none" />
-
+      <div className="p-6 md:p-7 bg-[#121218] rounded-2xl border border-[#24242D] relative shadow-sm">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2 max-w-xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-mono font-bold uppercase tracking-wider">
-              <Layers size={14} className="text-purple-400" />
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#8B5CF6]/10 border border-[#8B5CF6]/25 text-[#A78BFA] text-xs font-mono font-bold uppercase tracking-wider">
+              <Layers size={14} className="text-[#8B5CF6]" />
               <span>Central de Criativos & Aprovação</span>
             </div>
-            <h1 className="text-2xl md:text-3xl font-display font-black text-white tracking-tight">
+            <h1 className="text-2xl md:text-3xl font-display font-bold text-[#F2F2F5] tracking-tight">
               Organize Carrosséis, Vídeos e Imagens
             </h1>
-            <p className="text-xs md:text-sm text-zinc-400 leading-relaxed">
-              Suba até <strong className="text-white">20 imagens em carrossel</strong> com ordenação organizada ou <strong className="text-white">vídeos de até 15GB</strong> e envie o link interativo direto para aprovação do cliente.
+            <p className="text-xs md:text-sm text-[#92929F] leading-relaxed">
+              Suba até <strong className="text-[#F2F2F5]">20 imagens em carrossel</strong> com ordenação organizada ou <strong className="text-[#F2F2F5]">vídeos de até 15GB</strong> e compartilhe tanto o link individual de cada post quanto o <strong className="text-[#F2F2F5]">Link Geral da Central</strong> onde o cliente aprova tudo de uma só vez.
             </p>
           </div>
 
-          <button
-            onClick={handleOpenCreateModal}
-            className="self-start md:self-center px-6 py-3.5 rounded-2xl font-display font-bold text-sm bg-gradient-to-r from-purple-600 to-orange-500 hover:from-purple-500 hover:to-orange-400 text-white shadow-xl shadow-purple-600/25 hover:shadow-purple-600/40 transition-all flex items-center gap-2 cursor-pointer"
-          >
-            <Plus size={18} strokeWidth={2.5} />
-            <span>Novo Criativo</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setIsAIModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl font-display font-semibold text-xs bg-[#17171F] hover:bg-[#20202B] text-[#F2F2F5] border border-[#24242D] transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Sparkles size={16} className="text-[#A78BFA]" />
+              <span>Gerar Textos para Carrossel (IA)</span>
+            </button>
+
+            <button
+              onClick={handleOpenCreateModal}
+              className="px-5 py-2.5 rounded-xl font-display font-bold text-xs bg-white hover:bg-zinc-100 text-black shadow-sm transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Plus size={16} strokeWidth={2.5} />
+              <span>Novo Criativo</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 1.1 PROMINENT GENERAL LINK BANNER (LINK GERAL PARA O CLIENTE VER TUDO) */}
+        <div className="mt-5 p-4 md:p-5 bg-[#17171F] rounded-xl border border-[#24242D] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-md bg-[#8B5CF6]/15 text-[#A78BFA] border border-[#8B5CF6]/30 text-[10px] font-mono font-bold uppercase">
+                Link Geral da Marca
+              </span>
+              <h3 className="text-sm font-semibold text-[#F2F2F5] font-display">
+                Central Geral de Aprovação do Cliente {currentSelectedClientObj ? `(${currentSelectedClientObj.name})` : ''}
+              </h3>
+            </div>
+            <p className="text-xs text-[#92929F]">
+              Envie este link para seu cliente ver <strong className="text-[#F97316]">todos os {pendingCount} criativos pendentes</strong> em uma única tela e aprovar ou solicitar ajustes em lote.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              onClick={() => handleCopyGeneralLink()}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                copiedGeneralLink
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[#8B5CF6] hover:bg-[#7C3AED] text-white'
+              }`}
+            >
+              {copiedGeneralLink ? <Check size={14} /> : <Copy size={14} />}
+              <span>{copiedGeneralLink ? 'Link Geral Copiado!' : 'Copiar Link Geral da Central'}</span>
+            </button>
+
+            <button
+              onClick={() => handleShareGeneralWhatsApp()}
+              className="px-3.5 py-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-emerald-400 hover:text-emerald-300 border border-[#24242D] text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+              title="Enviar Central Completa pelo WhatsApp"
+            >
+              <Share2 size={14} />
+              <span className="hidden sm:inline">Enviar no WhatsApp</span>
+            </button>
+
+            <button
+              onClick={() => handlePreviewGeneralHub()}
+              className="px-3.5 py-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-[#92929F] hover:text-[#F2F2F5] border border-[#24242D] text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+              title="Visualizar a Central de Aprovação como o Cliente"
+            >
+              <ExternalLink size={14} />
+              <span className="hidden sm:inline">Visualizar como Cliente</span>
+            </button>
+          </div>
         </div>
 
         {/* STATS COUNTERS BAR */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4 mt-6 pt-6 border-t border-zinc-800/80">
-          <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-zinc-500 block mb-0.5">Total Criativos</span>
-            <div className="text-xl font-bold font-display text-white">{totalCount}</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-[#24242D]">
+          <div className="bg-[#17171F] border border-[#24242D] rounded-xl p-3.5">
+            <span className="text-[10px] font-mono uppercase font-bold text-[#686873] block mb-0.5">Total Criativos</span>
+            <div className="text-xl font-bold font-display text-[#F2F2F5]">{totalCount}</div>
           </div>
-          <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-blue-400 block mb-0.5">Aguardando Aprovação</span>
-            <div className="text-xl font-bold font-display text-blue-400">{pendingCount}</div>
+          <div className="bg-[#17171F] border border-[#F97316]/20 rounded-xl p-3.5">
+            <span className="text-[10px] font-mono uppercase font-bold text-[#F97316] block mb-0.5 flex items-center gap-1">
+              <Clock size={11} /> Aguardando Aprovação
+            </span>
+            <div className="text-xl font-bold font-display text-[#F97316]">{pendingCount}</div>
           </div>
-          <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-emerald-400 block mb-0.5">Aprovados</span>
-            <div className="text-xl font-bold font-display text-emerald-400">{approvedCount}</div>
+          <div className="bg-[#17171F] border border-blue-500/20 rounded-xl p-3.5">
+            <span className="text-[10px] font-mono uppercase font-bold text-blue-400 block mb-0.5 flex items-center gap-1">
+              <CheckCircle2 size={11} /> Aprovados
+            </span>
+            <div className="text-xl font-bold font-display text-blue-400">{approvedCount}</div>
           </div>
-          <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5">Ajustes Solicitados</span>
+          <div className="bg-[#17171F] border border-amber-500/20 rounded-xl p-3.5">
+            <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
+              <MessageSquare size={11} /> Ajustes Solicitados
+            </span>
             <div className="text-xl font-bold font-display text-amber-400">{changesCount}</div>
           </div>
         </div>
       </div>
 
       {/* 2. FILTER & SEARCH TOOLBAR */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-[#14141c] border border-zinc-800/80 p-4 rounded-2xl shadow-md">
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-[#121218] border border-[#24242D] p-3.5 rounded-xl shadow-sm">
         
         {/* Search Input */}
         <div className="relative flex-1 max-w-md">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#686873]" />
           <input
             type="text"
             placeholder="Buscar por título, cliente ou legenda..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500 transition-all"
+            className="w-full bg-[#17171F] border border-[#24242D] rounded-xl pl-9 pr-4 py-2 text-xs text-[#F2F2F5] placeholder-[#686873] focus:outline-none focus:border-[#8B5CF6]/50 transition-all"
           />
         </div>
 
         {/* Filter dropdowns */}
-        <div className="flex flex-wrap items-center gap-2.5 text-xs">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           
           {/* Client Filter */}
           <select
             value={selectedClientId}
             onChange={(e) => setSelectedClientId(e.target.value)}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-300 focus:outline-none focus:border-purple-500 cursor-pointer"
+            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
           >
             <option value="all">Todos os Clientes</option>
             {clients.map(c => (
@@ -562,7 +680,7 @@ export default function CreativeHubView({
           <select
             value={filterFormat}
             onChange={(e) => setFilterFormat(e.target.value)}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-300 focus:outline-none focus:border-purple-500 cursor-pointer"
+            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
           >
             <option value="all">Todos os Formatos</option>
             <option value="carousel">🎠 Carrossel (Até 20 imagens)</option>
@@ -574,11 +692,11 @@ export default function CreativeHubView({
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-300 focus:outline-none focus:border-purple-500 cursor-pointer"
+            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
           >
             <option value="all">Todos os Status</option>
             <option value="pending_approval">⏳ Aguardando Aprovação</option>
-            <option value="approved">✅ Aprovados</option>
+            <option value="approved">🔵 Aprovados</option>
             <option value="changes_requested">⚠️ Ajustes Solicitados</option>
             <option value="draft">📝 Rascunhos</option>
           </select>
@@ -587,173 +705,185 @@ export default function CreativeHubView({
 
       {/* 3. CREATIVES GRID LIST */}
       {filteredCreatives.length === 0 ? (
-        <div className="bg-[#14141c] border border-zinc-800/80 rounded-3xl p-12 text-center space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 mx-auto">
-            <ImageIcon size={32} />
+        <div className="bg-[#121218] border border-[#24242D] rounded-2xl p-12 text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-[#17171F] border border-[#24242D] flex items-center justify-center text-[#A78BFA] mx-auto">
+            <ImageIcon size={28} />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-white font-display">Nenhum criativo encontrado</h3>
-            <p className="text-xs text-zinc-400 max-w-sm mx-auto">
+            <h3 className="text-base font-bold text-[#F2F2F5] font-display">Nenhum criativo encontrado</h3>
+            <p className="text-xs text-[#92929F] max-w-sm mx-auto">
               Suba seu primeiro carrossel de até 20 imagens ou vídeo para enviar o link de aprovação ao cliente.
             </p>
           </div>
           <button
             onClick={handleOpenCreateModal}
-            className="px-5 py-2.5 rounded-xl font-bold text-xs bg-gradient-to-r from-purple-600 to-orange-500 text-white hover:opacity-90 transition-all cursor-pointer inline-flex items-center gap-2 shadow-lg"
+            className="px-5 py-2.5 rounded-xl font-bold text-xs bg-white text-black hover:bg-zinc-100 transition-all cursor-pointer inline-flex items-center gap-2 shadow-sm"
           >
-            <Plus size={16} />
+            <Plus size={16} strokeWidth={2.5} />
             <span>Criar Primeiro Criativo</span>
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredCreatives.map((creative) => {
             const firstAsset = creative.assets?.[0];
             const isCarousel = creative.format === 'carousel';
             const isVideo = creative.format === 'video' || firstAsset?.type === 'video';
+            const isPending = creative.status === 'pending_approval' || creative.status === 'draft';
+            const isApproved = creative.status === 'approved';
+            const isChanges = creative.status === 'changes_requested';
 
             return (
               <div
                 key={creative.id}
-                className="bg-[#14141c] border border-zinc-800/90 hover:border-purple-500/40 rounded-3xl overflow-hidden shadow-xl hover:shadow-2xl transition-all flex flex-col group"
+                className={`bg-[#121218] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col group border ${
+                  isPending
+                    ? 'border-[#F97316]/30 hover:border-[#F97316]/60'
+                    : isApproved
+                    ? 'border-blue-500/30 hover:border-blue-500/60'
+                    : isChanges
+                    ? 'border-amber-500/30 hover:border-amber-500/60'
+                    : 'border-[#24242D] hover:border-[#8B5CF6]/30'
+                }`}
               >
                 {/* CARD MEDIA THUMBNAIL */}
-                <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+                <div 
+                  onClick={() => handleViewAsClient(creative.shareToken)}
+                  className="relative aspect-video bg-[#0B0B0F] flex items-center justify-center overflow-hidden cursor-pointer"
+                >
                   {firstAsset ? (
                     isVideo ? (
-                      <video src={firstAsset.url} className="w-full h-full object-cover opacity-80 group-hover:scale-105 transition-transform duration-500" />
+                      <video src={firstAsset.url} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500" />
                     ) : (
                       <img
                         src={firstAsset.url}
                         alt={creative.title}
-                        className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500"
+                        className="w-full h-full object-cover opacity-95 group-hover:scale-105 transition-transform duration-500"
                       />
                     )
                   ) : (
-                    <div className="text-zinc-600">
+                    <div className="text-[#686873]">
                       <ImageIcon size={32} />
                     </div>
                   )}
 
                   {/* FORMAT BADGE */}
-                  <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-[10px] font-mono font-bold text-white flex items-center gap-1.5 shadow-lg">
+                  <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/80 border border-[#24242D] text-[10px] font-mono font-semibold text-[#F2F2F5] flex items-center gap-1.5 shadow-sm">
                     {isCarousel ? (
                       <>
-                        <Layers size={11} className="text-purple-400" />
-                        <span>Carrossel ({creative.assets?.length || 0} slides)</span>
+                        <Layers size={11} className="text-[#A78BFA]" />
+                        <span>Carrossel ({creative.assets?.length || 0})</span>
                       </>
                     ) : isVideo ? (
                       <>
-                        <Film size={11} className="text-orange-400" />
+                        <Film size={11} className="text-[#F97316]" />
                         <span>Vídeo</span>
                       </>
                     ) : (
                       <>
                         <ImageIcon size={11} className="text-blue-400" />
-                        <span>Imagem Única</span>
+                        <span>Imagem</span>
                       </>
                     )}
                   </div>
 
                   {/* STATUS BADGE */}
                   <div className="absolute top-3 right-3">
-                    {creative.status === 'approved' && (
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-500/90 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                    {isPending && (
+                      <span className="px-2.5 py-1 rounded-full bg-[#F97316]/20 border border-[#F97316]/40 text-[#F97316] text-[10px] font-semibold flex items-center gap-1">
+                        <Clock size={12} /> Aguardando Aprovação
+                      </span>
+                    )}
+                    {isApproved && (
+                      <span className="px-2.5 py-1 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold flex items-center gap-1">
                         <CheckCircle2 size={12} /> Aprovado
                       </span>
                     )}
-                    {creative.status === 'changes_requested' && (
-                      <span className="px-2.5 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                    {isChanges && (
+                      <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-semibold flex items-center gap-1">
                         <Clock size={12} /> Ajustes
-                      </span>
-                    )}
-                    {creative.status === 'pending_approval' && (
-                      <span className="px-2.5 py-1 rounded-full bg-blue-500/90 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
-                        <Clock size={12} /> Aguardando
-                      </span>
-                    )}
-                    {creative.status === 'draft' && (
-                      <span className="px-2.5 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[10px] font-bold shadow-lg">
-                        Rascunho
                       </span>
                     )}
                   </div>
                 </div>
 
                 {/* CARD BODY */}
-                <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
-                      <span className="text-purple-400 font-bold uppercase">{creative.clientName || 'Cliente'}</span>
+                <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-[#686873]">
+                      <span className="text-[#A78BFA] font-semibold uppercase">{creative.clientName || 'Cliente'}</span>
                       <span>{new Date(creative.createdAt).toLocaleDateString('pt-BR')}</span>
                     </div>
 
-                    <h3 className="font-bold text-sm text-white line-clamp-1 group-hover:text-purple-300 transition-colors">
+                    <h3 
+                      onClick={() => handleViewAsClient(creative.shareToken)}
+                      className="font-semibold text-sm text-[#F2F2F5] line-clamp-1 group-hover:text-[#A78BFA] transition-colors cursor-pointer"
+                    >
                       {creative.title}
                     </h3>
 
                     {creative.description && (
-                      <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+                      <p className="text-xs text-[#92929F] line-clamp-2 leading-relaxed">
                         {creative.description}
                       </p>
                     )}
 
                     {creative.clientFeedback && (
-                      <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
+                      <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
                         💬 "{creative.clientFeedback}"
                       </div>
                     )}
                   </div>
 
                   {/* CARD ACTIONS */}
-                  <div className="pt-3 border-t border-zinc-800/80 space-y-2">
+                  <div className="pt-3 border-t border-[#24242D] space-y-2">
                     
-                    {/* Direct Approval Link Actions */}
+                    {/* Individual Post Approval Link Actions */}
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleCopyLink(creative.shareToken)}
-                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md ${
+                        className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
                           copiedToken === creative.shareToken
-                            ? 'bg-emerald-500 text-white'
-                            : 'bg-purple-600 hover:bg-purple-500 text-white'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-[#17171F] hover:bg-[#20202B] text-[#F2F2F5] border border-[#24242D]'
                         }`}
-                        title="Copiar link de aprovação para o cliente"
+                        title="Copiar link de aprovação individual deste post"
                       >
                         {copiedToken === creative.shareToken ? (
                           <>
                             <Check size={13} />
-                            <span>Link Copiado!</span>
+                            <span>Link Individual Copiado</span>
                           </>
                         ) : (
                           <>
                             <Copy size={13} />
-                            <span>Copiar Link de Aprovação</span>
+                            <span>Copiar Link Individual</span>
                           </>
                         )}
                       </button>
 
                       <button
                         onClick={() => handleShareWhatsApp(creative)}
-                        className="p-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 transition-all cursor-pointer"
-                        title="Enviar pelo WhatsApp"
+                        className="p-2 rounded-xl bg-[#17171F] hover:bg-emerald-500/20 text-emerald-400 border border-[#24242D] transition-all cursor-pointer flex-shrink-0"
+                        title="Enviar este post pelo WhatsApp"
                       >
                         <Share2 size={14} />
                       </button>
 
                       <button
                         onClick={() => handleViewAsClient(creative.shareToken)}
-                        className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white border border-zinc-700 transition-all cursor-pointer"
-                        title="Visualizar como Cliente"
+                        className="p-2 rounded-xl bg-[#17171F] hover:bg-[#20202B] text-[#92929F] hover:text-[#F2F2F5] border border-[#24242D] transition-all cursor-pointer flex-shrink-0"
+                        title="Visualizar este post como Cliente"
                       >
                         <ExternalLink size={14} />
                       </button>
                     </div>
 
                     {/* Edit and Delete buttons */}
-                    <div className="flex items-center justify-end gap-1.5 text-zinc-500 pt-1">
+                    <div className="flex items-center justify-end gap-1.5 text-[#686873] pt-1">
                       <button
                         onClick={() => handleOpenEditModal(creative)}
-                        className="p-1.5 rounded-lg hover:bg-zinc-800 hover:text-white transition-all cursor-pointer text-xs flex items-center gap-1"
+                        className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
                       >
                         <Edit3 size={13} />
                         <span>Editar</span>
@@ -929,9 +1059,20 @@ export default function CreativeHubView({
 
                 {/* Caption / Description */}
                 <div>
-                  <label className="block text-[11px] font-mono uppercase font-bold text-zinc-400 mb-1.5">
-                    Legenda / Copy do Post
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-mono uppercase font-bold text-zinc-400">
+                      Legenda / Copy do Post
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setIsAIModalOpen(true)}
+                      className="text-[11px] font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1 cursor-pointer transition-colors"
+                      title="Gerar sugestão de copy e carrossel com IA"
+                    >
+                      <Sparkles size={12} className="text-purple-400" />
+                      <span>Gerar com IA</span>
+                    </button>
+                  </div>
                   <textarea
                     rows={4}
                     placeholder="Digite a legenda sugerida para o post..."
@@ -1123,12 +1264,12 @@ export default function CreativeHubView({
       )}
 
       {/* 5. IN-APP CLIENT APPROVAL PREVIEW MODAL (PREVENTS CONNECTION REFUSED / POPUP BLOCKING) */}
-      {previewingShareToken && (
+      {(previewingShareToken || previewingHubClientId) && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col">
           <div className="bg-[#121218] border-b border-zinc-800 px-6 py-3 flex items-center justify-between z-50">
             <div className="flex items-center gap-3">
               <span className="px-2.5 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono font-bold text-purple-400">
-                Pré-visualização do Cliente
+                {previewingHubClientId ? 'Central Geral do Cliente (Pré-visualização)' : 'Criativo Individual (Pré-visualização)'}
               </span>
               <p className="text-xs text-zinc-400 hidden sm:block">
                 Esta é a visualização exata que seu cliente terá ao abrir o link.
@@ -1138,21 +1279,32 @@ export default function CreativeHubView({
             <div className="flex items-center gap-3">
               <button
                 onClick={async () => {
-                  const url = `${window.location.origin}/aprovar?creativeToken=${previewingShareToken}`;
+                  const url = previewingHubClientId
+                    ? `${window.location.origin}/aprovar?client=${previewingHubClientId}&mode=hub`
+                    : `${window.location.origin}/aprovar?creativeToken=${previewingShareToken}`;
                   const success = await copyToClipboard(url);
                   if (success) {
-                    setCopiedToken(previewingShareToken);
-                    setTimeout(() => setCopiedToken(null), 3000);
+                    if (previewingShareToken) setCopiedToken(previewingShareToken);
+                    if (previewingHubClientId) setCopiedGeneralLink(true);
+                    setTimeout(() => {
+                      setCopiedToken(null);
+                      setCopiedGeneralLink(false);
+                    }, 3000);
                   }
                 }}
                 className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 hover:text-white flex items-center gap-1.5 cursor-pointer"
               >
                 <Copy size={13} />
-                <span>{copiedToken === previewingShareToken ? 'Link Copiado!' : 'Copiar Link Real'}</span>
+                <span>
+                  {copiedToken || copiedGeneralLink ? 'Link Copiado!' : 'Copiar Link Real'}
+                </span>
               </button>
               
               <button
-                onClick={() => setPreviewingShareToken(null)}
+                onClick={() => {
+                  setPreviewingShareToken(null);
+                  setPreviewingHubClientId(null);
+                }}
                 className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer"
               >
                 <X size={15} />
@@ -1163,12 +1315,27 @@ export default function CreativeHubView({
 
           <div className="flex-1 overflow-y-auto">
             <ClientCreativeApprovalPage
-              shareToken={previewingShareToken}
-              onBackToApp={() => setPreviewingShareToken(null)}
+              shareToken={previewingShareToken || undefined}
+              clientToken={previewingHubClientId || undefined}
+              initialMode={previewingHubClientId ? 'hub' : 'single'}
+              onBackToApp={() => {
+                setPreviewingShareToken(null);
+                setPreviewingHubClientId(null);
+              }}
             />
           </div>
         </div>
       )}
+
+      {/* 5. DESIGNER CAROUSEL AI GENERATOR MODAL */}
+      <DesignerCarouselAIModal
+        isOpen={isAIModalOpen}
+        onClose={() => setIsAIModalOpen(false)}
+        clients={clients}
+        activeClientId={formClientId || selectedClientId}
+        currentUser={currentUser}
+        onApplyToCreative={handleApplyAIToCreative}
+      />
 
     </div>
   );

@@ -6,27 +6,38 @@
   --font-display: 'Space Grotesk', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  --color-accent-purple-light: #E9D5FF;
+  /* Roxo */
+  --color-accent-purple-light: #A78BFA;
   --color-accent-purple: #8B5CF6;
-  --color-accent-purple-dark: #7C3AED;
-  --color-accent-purple-glow: rgba(139, 92, 246, 0.15);
+  --color-accent-purple-dark: #6D4CC4;
+  --color-accent-purple-glow: rgba(139, 92, 246, 0.08);
 
-  --color-accent-orange-light: #FFEDD5;
-  --color-accent-orange: #FF6B00;
-  --color-accent-orange-dark: #EA580C;
-  --color-accent-orange-glow: rgba(255, 107, 0, 0.15);
+  /* Laranja */
+  --color-accent-orange-light: #FDBA74;
+  --color-accent-orange: #F97316;
+  --color-accent-orange-dark: #D65F12;
+  --color-accent-orange-glow: rgba(249, 115, 22, 0.08);
 
+  /* Neutral Dark SaaS Palette - Original Backgrounds Restored */
   --color-panel-black: #09090B;
+  --color-panel-sidebar: #09090B;
   --color-panel-card: #121215;
   --color-panel-card-hover: #1A1A1E;
+  --color-panel-elevated: #1A1A1E;
   --color-panel-border: #27272A;
+  --color-panel-border-subtle: #1C1C1E;
   --color-panel-border-glow: #3F3F46;
+
+  /* Text Hierarchy */
+  --color-text-primary: #F2F2F5;
+  --color-text-secondary: #92929F;
+  --color-text-tertiary: #686873;
 }
 
 @layer base {
   body {
     background-color: var(--color-panel-black);
-    color: #F4F4F5;
+    color: var(--color-text-primary);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
@@ -34,8 +45,8 @@
 
   /* Custom subtle scrollbar styling */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
   ::-webkit-scrollbar-track {
     background: #09090B;
@@ -49,11 +60,11 @@
   }
 }
 
-/* Animations and extra styles */
+/* Animations and extra refined styles */
 .gradient-border-purple {
   border: 1px solid transparent;
   background-image: linear-gradient(var(--color-panel-card), var(--color-panel-card)), 
-                    linear-gradient(135deg, var(--color-accent-purple), transparent);
+                    linear-gradient(135deg, rgba(139, 92, 246, 0.35), transparent);
   background-origin: border-box;
   background-clip: padding-box, border-box;
 }
@@ -61,13 +72,14 @@
 .gradient-border-orange {
   border: 1px solid transparent;
   background-image: linear-gradient(var(--color-panel-card), var(--color-panel-card)), 
-                    linear-gradient(135deg, var(--color-accent-orange), transparent);
+                    linear-gradient(135deg, rgba(249, 115, 22, 0.35), transparent);
   background-origin: border-box;
   background-clip: padding-box, border-box;
 }
 
 .gradient-title {
-  background: linear-gradient(135deg, #FFFFFF 40%, var(--color-accent-purple) 70%, var(--color-accent-orange) 100%);
+  background: linear-gradient(135deg, #F2F2F5 60%, #A78BFA 90%, #F97316 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
+

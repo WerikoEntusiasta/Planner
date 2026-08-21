@@ -45,7 +45,9 @@ export default function PostEditorView({
   const [hashtagsRaw, setHashtagsRaw] = useState('');
   const [hookText, setHookText] = useState('');
   const [scriptText, setScriptText] = useState('');
+  const [ctaText, setCtaText] = useState('');
   const [visualIdea, setVisualIdea] = useState('');
+  const [coverThumbnail, setCoverThumbnail] = useState('');
 
   // Auto-adjust default format based on chosen platform
   useEffect(() => {
@@ -71,7 +73,9 @@ export default function PostEditorView({
       setHashtagsRaw(translated.hashtags ? translated.hashtags.join(', ') : '');
       setHookText(translated.hookText || '');
       setScriptText(translated.scriptText || '');
+      setCtaText(translated.ctaText || '');
       setVisualIdea(translated.visualIdea || '');
+      setCoverThumbnail(translated.coverThumbnail || '');
     } else {
       setTitle('');
       setPlatform('instagram');
@@ -84,9 +88,79 @@ export default function PostEditorView({
       setHashtagsRaw('');
       setHookText('');
       setScriptText('');
+      setCtaText('');
       setVisualIdea('');
+      setCoverThumbnail('');
     }
   }, [postToEdit, initialDate]);
+
+  const handleImproveIdeaAI = () => {
+    const topic = title.trim() || 'estratégia';
+    const improved = [
+      `7 erros de ${topic} que fazem empresas perder clientes todos os meses`,
+      `O método definitivo para destravar ${topic} em 5 passos práticos`,
+      `Por que o modelo tradicional de ${topic} falha (e como fazer do jeito certo)`
+    ];
+    setTitle(improved[Math.floor(Math.random() * improved.length)]);
+  };
+
+  const handleGenerateHookAI = () => {
+    const topicStr = title.trim() || 'estratégia de crescimento';
+    const hooksByFunnel = {
+      TOFU: [
+        `Você está cometendo esses 3 erros críticos com ${topicStr} e nem percebeu ainda.`,
+        `O maior mito sobre ${topicStr} que todo mundo repete, mas que está te fazendo perder tempo.`,
+        `Por que 90% das pessoas falham ao tentar ${topicStr} pela primeira vez?`
+      ],
+      MOFU: [
+        `A diferença exata entre quem tem resultados com ${topicStr} e quem continua estagnado.`,
+        `O método passo a passo que utilizamos para destravar ${topicStr} em poucos dias.`,
+        `Como analisar ${topicStr} da forma correta antes de tomar qualquer decisão.`
+      ],
+      BOFU: [
+        `Se você quer resolver ${topicStr} de vez e sem testes frustrantes, preste muita atenção nisso.`,
+        `O que falta para você implementar ${topicStr} com segurança ainda esta semana?`,
+        `Pare de adiar: veja como garantir resultados reais com ${topicStr} agora.`
+      ]
+    };
+    const pool = hooksByFunnel[funnelStage] || hooksByFunnel.TOFU;
+    setHookText(pool[Math.floor(Math.random() * pool.length)]);
+  };
+
+  const handleGenerateDevAI = () => {
+    const topicStr = title.trim() || 'esse tema';
+    if (platform === 'instagram' && format === 'carousel') {
+      setScriptText(`Slide 1: O problema real que ninguém fala sobre ${topicStr}.\nSlide 2: Por que as soluções tradicionais não funcionam mais.\nSlide 3: O princípio fundamental que muda tudo.\nSlide 4: Passo prático para aplicar hoje mesmo.\nSlide 5: Resumo e direcionamento.`);
+    } else if (platform === 'tiktok') {
+      setScriptText(`1. Contexto imediato: direto ao ponto, sem enrolação.\n2. A virada de chave: revele o segredo ou o contraste.\n3. Aplicação rápida: mostre como o espectador pode testar isso agora.`);
+    } else {
+      setScriptText(`1. Diagnóstico: Identifique o obstáculo central em relação a ${topicStr}.\n2. Fundamentação: Explique o conceito ou método com clareza e autoridade.\n3. Execução: Apresente o plano de ação prático e os critérios de sucesso.`);
+    }
+  };
+
+  const handleGenerateCtaAI = () => {
+    const ctasByFunnel = {
+      TOFU: `Salve este conteúdo para consultar depois e envie para alguém que precisa saber disso.`,
+      MOFU: `Qual desses pontos faz mais sentido para o seu momento atual? Comente aqui embaixo.`,
+      BOFU: `Clique no link da bio ou envie uma mensagem para dar o próximo passo.`
+    };
+    setCtaText(ctasByFunnel[funnelStage] || ctasByFunnel.TOFU);
+  };
+
+  const handleGenerateCompleteScriptAI = () => {
+    handleGenerateHookAI();
+    handleGenerateDevAI();
+    handleGenerateCtaAI();
+  };
+
+  const handleGenerateLegendAI = () => {
+    setDescription(`🚀 Descubra como transformar seus resultados com essas dicas práticas sobre ${title || 'conteúdo'}. Salve este post para consultar depois e envie para um amigo!`);
+  };
+
+  const handleGenerateHashtagsAI = () => {
+    const tags = ['estrategia', 'crescimento', 'marketing', 'negocios', platform, format];
+    setHashtagsRaw(tags.join(', '));
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,7 +185,9 @@ export default function PostEditorView({
       hashtags: parsedHashtags,
       hookText: hookText.trim(),
       scriptText: scriptText.trim(),
+      ctaText: ctaText.trim(),
       visualIdea: visualIdea.trim(),
+      coverThumbnail: coverThumbnail.trim(),
       approvalStatus: postToEdit ? postToEdit.approvalStatus : undefined,
       approvalFeedback: postToEdit ? postToEdit.approvalFeedback : undefined,
       approvalDate: postToEdit ? postToEdit.approvalDate : undefined,
@@ -292,11 +368,21 @@ export default function PostEditorView({
             </div>
           </div>
 
-          {/* PASSO 2: TÍTULO / GANCHO PRINCIPAL */}
+          {/* 2. IDEIA DO CONTEÚDO */}
           <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-4">
-            <div className="flex items-center gap-2.5 text-xs font-mono font-bold uppercase text-accent-orange">
-              <span className="w-6 h-6 rounded-full bg-accent-orange/20 flex items-center justify-center text-accent-orange text-xs font-black">2</span>
-              <span>Título / Gancho Principal do Post</span>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-mono font-bold uppercase text-accent-orange tracking-wider">2. Ideia do Conteúdo</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">O que quero falar?</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleImproveIdeaAI}
+                className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Sparkles size={14} className="text-purple-400" />
+                <span>Reimaginar com IA</span>
+              </button>
             </div>
             <div>
               <input 
@@ -304,90 +390,209 @@ export default function PostEditorView({
                 required
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Ex: 7 erros fatais de design que matam o engajamento e afugentam clientes"
-                className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-4 text-base font-medium focus:outline-none focus:border-zinc-500 placeholder-zinc-600 shadow-inner"
+                placeholder="Ex: 7 erros de design que fazem empresas perder clientes"
+                className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-4 text-sm font-medium focus:outline-none focus:border-accent-purple placeholder-zinc-600 shadow-inner"
               />
             </div>
           </div>
 
-          {/* PASSO 3: ROTEIRO & DESCRIÇÃO */}
-          <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-5">
-            <div className="flex items-center gap-2.5 text-xs font-mono font-bold uppercase text-accent-purple">
-              <span className="w-6 h-6 rounded-full bg-accent-purple/20 flex items-center justify-center text-accent-purple text-xs font-black">3</span>
-              <span>Arquitetura de Roteiro & Direcionamento Criativo</span>
+          {/* 3. ROTEIRO DO CONTEÚDO */}
+          <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-6">
+            <div className="flex items-center justify-between border-b border-panel-border pb-3">
+              <div>
+                <h3 className="text-sm font-display font-bold text-white uppercase tracking-wider">Roteiro</h3>
+                <p className="text-xs text-zinc-400">O que será falado no conteúdo</p>
+              </div>
+              <span className="text-[10px] font-mono uppercase bg-accent-purple/20 text-accent-purple px-2.5 py-1 rounded-full border border-accent-purple/30">Etapa 3</span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-[11px] font-mono text-zinc-400 uppercase mb-1.5">
-                  Gancho (Primeiros 3s)
-                </label>
-                <input 
-                  type="text"
-                  value={hookText}
-                  onChange={(e) => setHookText(e.target.value)}
-                  placeholder="Ex: Pare de fazer isso no Instagram..."
-                  className="w-full bg-panel-black text-zinc-200 border border-panel-border rounded-xl p-3 text-xs focus:outline-none focus:border-zinc-500"
-                />
+            {/* Gancho */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-xs font-semibold text-zinc-200">Gancho</label>
+                  <p className="text-[11px] text-zinc-400">Campo maior — primeiros segundos para prender a atenção.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateHookAI}
+                  className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Sparkles size={13} className="text-purple-400" />
+                  <span>Reimaginar com IA</span>
+                </button>
               </div>
+              <input 
+                type="text"
+                value={hookText}
+                onChange={(e) => setHookText(e.target.value)}
+                placeholder="Ex: Você está cometendo esses 3 erros e nem percebe..."
+                className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600"
+              />
+            </div>
 
-              <div>
-                <label className="block text-[11px] font-mono text-zinc-400 uppercase mb-1.5">
-                  Linha de Roteiro / CTA
-                </label>
-                <input 
-                  type="text"
-                  value={scriptText}
-                  onChange={(e) => setScriptText(e.target.value)}
-                  placeholder="Passo 1, Passo 2, CTA final"
-                  className="w-full bg-panel-black text-zinc-200 border border-panel-border rounded-xl p-3 text-xs focus:outline-none focus:border-zinc-500"
-                />
+            {/* Desenvolvimento */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-xs font-semibold text-zinc-200">Desenvolvimento</label>
+                  <p className="text-[11px] text-zinc-400">Campo grande — parte principal do roteiro.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateDevAI}
+                  className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Sparkles size={13} className="text-purple-400" />
+                  <span>Reimaginar com IA</span>
+                </button>
               </div>
+              <textarea 
+                rows={5}
+                value={scriptText}
+                onChange={(e) => setScriptText(e.target.value)}
+                placeholder="Explique o que será apresentado no conteúdo, os pontos principais, exemplos ou argumentos..."
+                className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600 resize-none leading-relaxed"
+              />
+            </div>
 
+            {/* CTA */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-xs font-semibold text-zinc-200">CTA — Chamada para ação</label>
+                  <p className="text-[11px] text-zinc-400">Campo menor — ação final desejada.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateCtaAI}
+                  className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Sparkles size={13} className="text-purple-400" />
+                  <span>Reimaginar com IA</span>
+                </button>
+              </div>
+              <input 
+                type="text"
+                value={ctaText}
+                onChange={(e) => setCtaText(e.target.value)}
+                placeholder="Ex: Salve este conteúdo e compartilhe com alguém que precisa ver isso."
+                className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600"
+              />
+            </div>
+
+            {/* Melhorar com IA & Salvar */}
+            <div className="pt-2 space-y-2">
+              <button
+                type="button"
+                onClick={handleGenerateCompleteScriptAI}
+                className="w-full py-3 px-4 rounded-xl font-semibold text-xs bg-[#8B5CF6] hover:bg-[#7C3AED] text-white shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Sparkles size={16} className="text-white" />
+                <span>Reimaginar com IA</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const saveBtn = document.getElementById('save-post-btn') as HTMLButtonElement;
+                  if (saveBtn) saveBtn.click();
+                }}
+                className="w-full py-2.5 px-4 rounded-xl font-semibold text-xs bg-panel-black hover:bg-zinc-800 text-zinc-200 border border-panel-border transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>Salvar</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 4. DIREÇÃO CRIATIVA */}
+          <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-4">
+            <div>
+              <h3 className="text-sm font-display font-bold text-white uppercase tracking-wider">Direção Criativa</h3>
+              <p className="text-xs text-zinc-400">Como o conteúdo será apresentado visualmente</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-[11px] font-mono text-zinc-400 uppercase mb-1.5">
-                  Ideia Visual / Capa
-                </label>
+                <label className="block text-xs font-semibold text-zinc-200 mb-1.5">Ideia visual</label>
                 <input 
                   type="text"
                   value={visualIdea}
                   onChange={(e) => setVisualIdea(e.target.value)}
-                  placeholder="Ex: Fundo roxo com texto gigante"
-                  className="w-full bg-panel-black text-zinc-200 border border-panel-border rounded-xl p-3 text-xs focus:outline-none focus:border-zinc-500"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2 border-t border-panel-border/60">
-              <div>
-                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider mb-2">Descrição / Legenda</label>
-                <textarea 
-                  rows={4}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Qual o objetivo desse post? Escreva o texto completo da legenda ou os tópicos principais..."
-                  className="w-full bg-panel-black text-zinc-300 border border-panel-border rounded-xl p-3 text-xs focus:outline-none focus:border-zinc-500 resize-none font-medium leading-relaxed"
+                  placeholder="Ex: Pessoa falando diretamente para a câmera em ambiente profissional..."
+                  className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider mb-2">Hashtags Estratégicas</label>
-                <textarea 
-                  rows={4}
-                  value={hashtagsRaw}
-                  onChange={(e) => setHashtagsRaw(e.target.value)}
-                  placeholder="marketing, reels, dicascriativas, designera (separadas por vírgula)"
-                  className="w-full bg-panel-black text-zinc-300 border border-panel-border rounded-xl p-3 text-xs focus:outline-none focus:border-zinc-500 resize-none font-mono leading-relaxed"
+                <label className="block text-xs font-semibold text-zinc-200 mb-1.5">Capa / Thumbnail</label>
+                <input 
+                  type="text"
+                  value={coverThumbnail}
+                  onChange={(e) => setCoverThumbnail(e.target.value)}
+                  placeholder="Ex: Texto grande destacando o principal benefício..."
+                  className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600"
                 />
-                <p className="text-[10px] text-zinc-500 mt-1.5 uppercase font-mono">O caractere # será formatado automaticamente.</p>
               </div>
             </div>
           </div>
 
-          {/* PASSO 4: DATA, HORÁRIO & STATUS */}
+          {/* 5. LEGENDA */}
+          <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-display font-bold text-white uppercase tracking-wider">Legenda</h3>
+                <p className="text-xs text-zinc-400">Texto complementar para a publicação</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateLegendAI}
+                className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <Sparkles size={13} />
+                <span>Gerar legenda com IA</span>
+              </button>
+            </div>
+
+            <textarea 
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Escreva ou gere a legenda completa da postagem..."
+              className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600 resize-none leading-relaxed font-medium"
+            />
+          </div>
+
+          {/* 6. HASHTAGS */}
+          <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-display font-bold text-white uppercase tracking-wider">Hashtags</h3>
+                <p className="text-xs text-zinc-400">Hashtags estratégicas (separadas por vírgula)</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateHashtagsAI}
+                className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <Sparkles size={13} />
+                <span>Gerar hashtags com IA</span>
+              </button>
+            </div>
+
+            <input 
+              type="text"
+              value={hashtagsRaw}
+              onChange={(e) => setHashtagsRaw(e.target.value)}
+              placeholder="Ex: marketing, reels, dicascriativas"
+              className="w-full bg-panel-black text-white border border-panel-border rounded-xl p-3.5 text-xs focus:outline-none focus:border-accent-purple placeholder-zinc-600 font-mono"
+            />
+            <p className="text-[10px] text-zinc-500 font-mono">O caractere # será formatado automaticamente.</p>
+          </div>
+
+          {/* 7. DATA, HORÁRIO & STATUS */}
           <div className="p-6 rounded-2xl bg-panel-card border border-panel-border shadow-xl space-y-4">
             <div className="flex items-center gap-2.5 text-xs font-mono font-bold uppercase text-emerald-400">
-              <span className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs font-black">4</span>
+              <span className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs font-black">7</span>
               <span>Data, Horário de Pico & Status de Publicação</span>
             </div>
 

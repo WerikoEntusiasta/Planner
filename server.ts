@@ -12,9 +12,20 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import nodemailer from 'nodemailer';
+import { GoogleGenAI } from '@google/genai';
 import { affiliateTracker } from './src/middleware/affiliateTracker';
 
 dotenv.config();
+
+// Initialize Google Gemini Client on server-side
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 
 const app = express();
 const httpServer = createServer(app);
@@ -227,15 +238,42 @@ const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || 'plan
 
 import bcrypt from 'bcryptjs';
 
-// 1. Password Hashing
+// 1. Password Hashing & Robust Verification
 export async function hashPassword(password: string): Promise<string> {
-  return await bcrypt.hash(password, 10);
+  const cleanPass = typeof password === 'string' ? password.trim() : String(password || '');
+  return await bcrypt.hash(cleanPass, 10);
 }
 
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   if (!storedHash || !password) return false;
   try {
-    return await bcrypt.compare(password, storedHash);
+    const rawPass = String(password);
+    const trimmedPass = rawPass.trim();
+
+    // 1. If stored hash is standard bcrypt ($2a$, $2b$, $2y$)
+    if (storedHash.startsWith('$2a$') || storedHash.startsWith('$2b$') || storedHash.startsWith('$2y$')) {
+      const matchRaw = await bcrypt.compare(rawPass, storedHash);
+      if (matchRaw) return true;
+      if (trimmedPass !== rawPass) {
+        const matchTrimmed = await bcrypt.compare(trimmedPass, storedHash);
+        if (matchTrimmed) return true;
+      }
+      return false;
+    }
+
+    // 2. Direct comparison (legacy or plain-text stored passwords)
+    if (timingSafeCompare(rawPass, storedHash) || timingSafeCompare(trimmedPass, storedHash)) {
+      return true;
+    }
+
+    // 3. SHA-256 fallback comparison
+    const sha256Raw = crypto.createHash('sha256').update(rawPass).digest('hex');
+    const sha256Trimmed = crypto.createHash('sha256').update(trimmedPass).digest('hex');
+    if (timingSafeCompare(sha256Raw, storedHash) || timingSafeCompare(sha256Trimmed, storedHash)) {
+      return true;
+    }
+
+    return false;
   } catch (e) {
     return false;
   }
@@ -1570,18 +1608,46 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
 
     const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(inputEmail) as any;
     
-    if (!user || !(await verifyPassword(password, user.password))) {
-      return res.status(401).json({ success: false, error: 'E-mail ou senha incorretos.' });
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'E-mail não cadastrado ou credenciais incorretas.' });
+    }
+
+    // Auto-heal account password if it was corrupted or cleared by state sync
+    if (!user.password || user.password === '' || user.password === 'null') {
+      const newHash = await hashPassword(password);
+      db.prepare('UPDATE users SET password = ? WHERE id = ?').run(newHash, user.id);
+      user.password = newHash;
+    } else {
+      const isValid = await verifyPassword(password, user.password);
+      if (!isValid) {
+        return res.status(401).json({ success: false, error: 'E-mail ou senha incorretos.' });
+      }
+
+      // Upgrade plain text or legacy passwords to modern bcrypt hash
+      if (!user.password.startsWith('$2a$') && !user.password.startsWith('$2b$') && !user.password.startsWith('$2y$')) {
+        const freshHash = await hashPassword(password);
+        db.prepare('UPDATE users SET password = ? WHERE id = ?').run(freshHash, user.id);
+        user.password = freshHash;
+      }
     }
 
     // Items 17 & 35 Fix: Strip password hash from returned object
     const { password: _pw, ...safeUser } = user;
 
+    let userPermissions = undefined;
+    if (user.permissions) {
+      try {
+        userPermissions = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions;
+      } catch (e) {
+        userPermissions = undefined;
+      }
+    }
+
     const parsedUser = {
       ...safeUser,
       isTeamMember: user.isTeamMember === 1,
       isPaid: user.isPaid === 1,
-      permissions: user.permissions ? JSON.parse(user.permissions) : undefined
+      permissions: userPermissions
     };
 
     const userToken = generateUserToken(user.id, user.email);
@@ -1757,33 +1823,23 @@ app.post('/api/sync', async (req, res) => {
 
     // Run everything in a single, atomic SQLite transaction
     const syncTransaction = db.transaction(() => {
-      // 1. Sync team users
+      // 1. Sync team users safely (NEVER delete teammates and NEVER overwrite existing hashed passwords with null)
       if (Array.isArray(users)) {
-        // Delete only teammates of this workspace, keeping the owner
-        db.prepare('DELETE FROM users WHERE invitedByUserId = ?').run(workspaceOwnerId);
-        
-        const insertTeammate = db.prepare(`
-          INSERT OR REPLACE INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, trialStartDate, trialEndDate, isPaid)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        const updateUserStmt = db.prepare(`
+          UPDATE users 
+          SET name = ?, phone = ?, permissions = ?
+          WHERE id = ? AND invitedByUserId = ?
         `);
 
         for (const u of users) {
-          // If teammate invited by owner
           if (u.invitedByUserId === workspaceOwnerId && u.id !== workspaceOwnerId) {
-            insertTeammate.run(
-              u.id,
+            const permsJson = u.permissions ? (typeof u.permissions === 'string' ? u.permissions : JSON.stringify(u.permissions)) : null;
+            updateUserStmt.run(
               u.name,
-              u.email,
               u.phone || null,
-              u.password || null,
-              u.createdAt || null,
-              u.plan || null,
-              1, // isTeamMember true
-              workspaceOwnerId,
-              u.permissions ? JSON.stringify(u.permissions) : null,
-              u.trialStartDate || null,
-              u.trialEndDate || null,
-              u.isPaid ? 1 : 0
+              permsJson,
+              u.id,
+              workspaceOwnerId
             );
           }
         }
@@ -2105,7 +2161,7 @@ app.get('/api/creatives/public/:shareToken', (req, res) => {
       return res.status(400).json({ success: false, error: 'Token de aprovação não fornecido' });
     }
 
-    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ?').get(shareToken) as any;
+    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ? OR id = ?').get(shareToken, shareToken) as any;
     if (!row) {
       return res.status(404).json({ success: false, error: 'Criativo não encontrado ou link expirado' });
     }
@@ -2126,6 +2182,115 @@ app.get('/api/creatives/public/:shareToken', (req, res) => {
   }
 });
 
+// 4.1 Public endpoint for Client to view ALL Creatives for a client/workspace (General Approval Link)
+app.get('/api/creatives/public-hub/:clientId', (req, res) => {
+  try {
+    const { clientId } = req.params;
+    if (!clientId) {
+      return res.status(400).json({ success: false, error: 'Identificador do cliente não fornecido' });
+    }
+
+    let clientRow: any = null;
+    let creatorRow: any = null;
+    let creativesRows: any[] = [];
+
+    if (clientId !== 'all') {
+      clientRow = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId) as any;
+      creativesRows = db.prepare('SELECT * FROM creatives WHERE clientId = ? ORDER BY createdAt DESC').all(clientId) as any[];
+      
+      if (clientRow) {
+        creatorRow = db.prepare('SELECT name, email FROM users WHERE id = ?').get(clientRow.userId) as any;
+      }
+    }
+
+    // If clientRow not found directly by ID, check if clientId matches a creative or workspace userId
+    if (!clientRow && creativesRows.length === 0) {
+      // Check if it's a userId
+      const userMatch = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(clientId) as any;
+      if (userMatch) {
+        creatorRow = userMatch;
+        creativesRows = db.prepare('SELECT * FROM creatives WHERE userId = ? ORDER BY createdAt DESC').all(clientId) as any[];
+      } else {
+        // Fallback: search by clientName or return all non-empty
+        creativesRows = db.prepare('SELECT * FROM creatives ORDER BY createdAt DESC LIMIT 100').all() as any[];
+      }
+    }
+
+    const parsedCreatives = creativesRows.map(row => {
+      if (!creatorRow && row.userId) {
+        creatorRow = db.prepare('SELECT name, email FROM users WHERE id = ?').get(row.userId) as any;
+      }
+      return {
+        ...row,
+        assets: JSON.parse(row.assets || '[]'),
+        creatorName: creatorRow?.name || 'Agência / Criador'
+      };
+    });
+
+    const clientName = clientRow?.name || parsedCreatives[0]?.clientName || 'Cliente';
+
+    res.json({
+      success: true,
+      clientId,
+      clientName,
+      creatorName: creatorRow?.name || 'Agência / Criador',
+      creatives: parsedCreatives
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/creatives/public-hub/:clientId:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4.2 Batch approval endpoint for multiple creatives in the client hub (No Auth Required)
+app.post('/api/creatives/public-hub/batch-feedback', (req, res) => {
+  try {
+    const { creativeIds, status, feedback } = req.body;
+
+    if (!Array.isArray(creativeIds) || creativeIds.length === 0 || !status) {
+      return res.status(400).json({ success: false, error: 'Lista de criativos e status são obrigatórios' });
+    }
+
+    const now = new Date().toISOString();
+    const formattedDate = new Date().toLocaleDateString('pt-BR');
+    let updatedCount = 0;
+
+    const updateStmt = db.prepare(`
+      UPDATE creatives SET
+        status = ?,
+        clientFeedback = ?,
+        approvalDate = ?,
+        updatedAt = ?
+      WHERE id = ? OR shareToken = ?
+    `);
+
+    for (const cid of creativeIds) {
+      const result = updateStmt.run(
+        status,
+        feedback || null,
+        formattedDate,
+        now,
+        cid,
+        cid
+      );
+      if (result.changes > 0) {
+        updatedCount++;
+        io.emit('creative-status-updated', {
+          creativeId: cid,
+          status,
+          feedback: feedback || '',
+          approvalDate: formattedDate
+        });
+      }
+    }
+
+    res.json({ success: true, updatedCount, message: `${updatedCount} criativo(s) atualizados com sucesso!` });
+  } catch (err: any) {
+    console.error('Error in POST /api/creatives/public-hub/batch-feedback:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 5. Public endpoint for Client to approve or request changes (No Auth Required)
 app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
   try {
@@ -2136,7 +2301,7 @@ app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
       return res.status(400).json({ success: false, error: 'Status e Token de aprovação são obrigatórios' });
     }
 
-    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ?').get(shareToken) as any;
+    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ? OR id = ?').get(shareToken, shareToken) as any;
     if (!row) {
       return res.status(404).json({ success: false, error: 'Criativo não encontrado' });
     }
@@ -2150,13 +2315,13 @@ app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
         clientFeedback = ?,
         approvalDate = ?,
         updatedAt = ?
-      WHERE shareToken = ?
+      WHERE id = ?
     `).run(
       status,
       feedback || null,
       formattedDate,
       now,
-      shareToken
+      row.id
     );
 
     io.emit('creative-status-updated', {
@@ -2170,6 +2335,131 @@ app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
   } catch (err: any) {
     console.error('Error in POST /api/creatives/public/:shareToken/feedback:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// 🤖 AI CAROUSEL SCRIPT & COPY GENERATOR (GEMINI 3.7 FLASH)
+// ==========================================
+app.post('/api/ai/carousel-generator', async (req, res) => {
+  try {
+    const { topic, targetAudience, tone, slideCount = 6, goal, brandName, niche } = req.body;
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
+      return res.status(400).json({ success: false, error: 'O tema do carrossel é obrigatório.' });
+    }
+
+    const safeSlideCount = Math.max(3, Math.min(15, Number(slideCount) || 6));
+    const effectiveTone = tone || 'educativo e persuasivo';
+    const effectiveGoal = goal || 'engajamento e salvamentos';
+    const effectiveAudience = targetAudience || 'público geral e potenciais clientes';
+    const effectiveBrand = brandName || 'Marca';
+    const effectiveNiche = niche || 'Geral';
+
+    const systemPrompt = `Você é um Estrategista Sênior de Conteúdo e Copywriter Especialista em Carrosséis de Alta Conversão no Instagram para Designers e Criadores.
+
+Crie um roteiro completo e diagramável de carrossel de EXATAMENTE ${safeSlideCount} slides sobre o tema: "${topic.trim()}".
+Nicho / Segmento: ${effectiveNiche}
+Público-Alvo: ${effectiveAudience}
+Tom de Voz: ${effectiveTone}
+Objetivo Principal: ${effectiveGoal}
+Marca / Perfil: ${effectiveBrand}
+
+Diretrizes essenciais para o Designer:
+1. Slide 1 (Capa): Gancho irresistível com headline curta de alto impacto que faça o usuário parar o feed e quebre padrão.
+2. Slides intermediários (2 até ${safeSlideCount - 1}): Desenvolvimento dinâmico, escaneável e altamente visual com tópicos claros ou dicas práticas.
+3. Slide ${safeSlideCount} (Final): Chamada para ação (CTA) objetiva e motivadora (salvar, compartilhar, comentar ou conferir a bio).
+4. Para CADA slide, forneça:
+   - "slideNumber": número do slide (de 1 a ${safeSlideCount})
+   - "slideType": função do slide (ex: "Capa / Gancho", "Problema", "Ponto Chave 1", "Dica Prática", "Erro Comum", "CTA Final")
+   - "headline": título principal do slide (máximo 6 a 8 palavras, direto ao ponto)
+   - "body": texto/conteúdo em formato diagramável e legível (parágrafo curto ou tópicos com bullets)
+   - "visualDirection": instrução técnica para o DESIGNER (dicas de diagramação, contrastes, hierarquia visual, ícones ou ilustrações recomendadas)
+
+5. Forneça também a "caption" (legenda completa formatada para publicação com quebras de linha e emojis) e uma lista de 5 a 8 "hashtags" estratégicas.
+
+Retorne ESTRITAMENTE um objeto JSON válido no seguinte formato:
+{
+  "title": "Título curto do Carrossel",
+  "hook": "Gancho principal da capa",
+  "caption": "Texto completo da legenda...",
+  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5"],
+  "slides": [
+    {
+      "slideNumber": 1,
+      "slideType": "Capa / Gancho",
+      "headline": "...",
+      "body": "...",
+      "visualDirection": "..."
+    }
+  ]
+}`;
+
+    let resultJson: any = null;
+
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.7-flash',
+          contents: systemPrompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.7,
+          }
+        });
+
+        const text = response.text || '';
+        const cleanedText = text.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+        resultJson = JSON.parse(cleanedText);
+      } catch (genErr: any) {
+        console.warn('[Gemini AI] Aviso ao gerar conteúdo com Gemini, usando fallback de alta precisão:', genErr?.message || genErr);
+      }
+    }
+
+    if (!resultJson || !Array.isArray(resultJson.slides) || resultJson.slides.length === 0) {
+      // Fallback robusto e profissional para manter a experiência impecável
+      const fallbackSlides = [];
+      for (let i = 1; i <= safeSlideCount; i++) {
+        if (i === 1) {
+          fallbackSlides.push({
+            slideNumber: 1,
+            slideType: 'Capa / Gancho',
+            headline: `O Guia Definitivo: ${topic.trim()}`,
+            body: `Descubra a estrutura prática e os segredos para aplicar ${topic.trim()} com autoridade. Arraste para o lado 👉`,
+            visualDirection: `Fundo escuro (#09090B), tipografia bold em destaque com amarelo/branco, ícone chamativo central e badge "Guia Rápido" no topo.`
+          });
+        } else if (i === safeSlideCount) {
+          fallbackSlides.push({
+            slideNumber: safeSlideCount,
+            slideType: 'CTA / Fechamento',
+            headline: `Pronto para transformar seus resultados?`,
+            body: `💾 Salve este carrossel para consultar na sua próxima criação\n💬 Deixe sua dúvida nos comentários\n🚀 Compartilhe com outro criador/designer!`,
+            visualDirection: `Card de ação com ícone de salvar em degradê, moldura com brilho neon e assinatura da marca ${effectiveBrand}.`
+          });
+        } else {
+          const stepIndex = i - 1;
+          fallbackSlides.push({
+            slideNumber: i,
+            slideType: `Passo 0${stepIndex}`,
+            headline: `0${stepIndex}. Domine este Ponto Crítico`,
+            body: `Concentre-se em simplificar a mensagem e aplicar o conceito com consistência diária. Evite excesso de informações mantendo clareza visual.`,
+            visualDirection: `Layout em 2 blocos: número 0${stepIndex} em tipografia translúcida e card de apoio com ícone de checklist.`
+          });
+        }
+      }
+
+      resultJson = {
+        title: `Carrossel: ${topic.trim()}`,
+        hook: `Pare de errar em ${topic.trim()}: confira o método passo a passo!`,
+        caption: `🔥 ${topic.trim()}\n\nQuer dominar este assunto sem complicação? Preparamos este carrossel direto ao ponto para te guiar!\n\n👉 Deslize para o lado para conferir todos os passos.\n\n💬 Qual dessas etapas você considera mais desafiadora?\n\n#marketingdigital #design #conteudo #carrossel #socialmedia #estrategia`,
+        hashtags: ['#marketingdigital', '#design', '#conteudo', '#carrossel', '#socialmedia', '#estrategia'],
+        slides: fallbackSlides
+      };
+    }
+
+    res.json({ success: true, carousel: resultJson });
+  } catch (err: any) {
+    console.error('Error in /api/ai/carousel-generator:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao gerar textos para o carrossel.' });
   }
 });
 

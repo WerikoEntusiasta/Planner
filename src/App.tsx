@@ -1194,13 +1194,18 @@ export default function App() {
   const queryParams = new URLSearchParams(window.location.search);
   const approvePostId = queryParams.get('approvePostId');
   const creativeToken = queryParams.get('creativeToken') || queryParams.get('shareToken') || queryParams.get('token');
-  const isCreativeApprovalUrl = window.location.pathname.includes('/aprovar-criativo') || (window.location.pathname.includes('/aprovar') && creativeToken);
+  const clientApprovalToken = queryParams.get('clientToken') || queryParams.get('client') || queryParams.get('clientId');
+  const isGeneralHubMode = queryParams.get('mode') === 'hub' || window.location.pathname.includes('/aprovar-criativos') || window.location.pathname.includes('/central-aprovacao');
+  const isCreativeApprovalUrl = window.location.pathname.includes('/aprovar-criativo') || 
+    (window.location.pathname.includes('/aprovar') && (creativeToken || clientApprovalToken || isGeneralHubMode));
 
-  // Creative Client Approval Portal
-  if (creativeToken || isCreativeApprovalUrl) {
+  // Creative Client Approval Portal (Supports Single Creative & General Hub for All Creatives)
+  if (creativeToken || clientApprovalToken || isCreativeApprovalUrl || isGeneralHubMode) {
     return (
       <ClientCreativeApprovalPage 
-        shareToken={creativeToken || window.location.pathname.split('/').pop() || ''} 
+        shareToken={creativeToken || ''} 
+        clientToken={clientApprovalToken || ''}
+        initialMode={isGeneralHubMode || Boolean(clientApprovalToken) ? 'hub' : 'single'}
         onBackToApp={currentUser ? () => {
           window.history.replaceState({}, '', '/');
           window.location.reload();
@@ -1468,6 +1473,7 @@ export default function App() {
           
           {/* Quick Onboarding Success Guide for Customer Experience */}
           <QuickOnboardingGuide
+            currentUser={currentUser}
             posts={clientPosts}
             activeClient={userClients.find(c => c.id === activeClientId)}
             onOpenBrandKit={() => setIsBrandKitModalOpen(true)}

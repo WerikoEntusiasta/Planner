@@ -87,17 +87,17 @@ export default function Header({
         <div className="flex items-center gap-3">
           <button
             onClick={onOpenMobileSidebar}
-            className="lg:hidden p-2 rounded-xl bg-panel-card border border-panel-border text-zinc-300 hover:text-white cursor-pointer"
+            className="lg:hidden p-2 rounded-xl bg-[#121218] border border-[#24242D] text-[#92929F] hover:text-[#F2F2F5] cursor-pointer"
             title="Abrir Menu Lateral"
           >
             <Menu size={18} />
           </button>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-lg md:text-xl font-display font-bold text-white tracking-tight">
+              <h2 className="text-lg md:text-xl font-display font-bold text-[#F2F2F5] tracking-tight">
                 {getViewTitle()}
               </h2>
-              <span className="px-2 py-0.5 rounded-md text-[9px] font-mono border border-accent-purple/40 bg-accent-purple/10 text-accent-purple">
+              <span className="px-2 py-0.5 rounded-md text-[9px] font-mono border border-[#8B5CF6]/30 bg-[#8B5CF6]/10 text-[#A78BFA]">
                 PRO 2026
               </span>
               <div 
@@ -108,7 +108,7 @@ export default function Header({
                 <span className="hidden sm:inline">Tempo Real</span>
               </div>
             </div>
-            <p className="text-xs text-zinc-400">
+            <p className="text-xs text-[#92929F]">
               Gerencie e filtre seu conteúdo multicanal em tempo real
             </p>
           </div>
@@ -118,12 +118,12 @@ export default function Header({
         {canCreate ? (
           <button
             onClick={onNewPostClick}
-            className="md:hidden flex items-center justify-center p-2 rounded-xl bg-gradient-to-r from-accent-purple to-accent-orange text-white shadow-md cursor-pointer"
+            className="md:hidden flex items-center justify-center p-2 rounded-xl bg-white hover:bg-zinc-100 text-black shadow-sm cursor-pointer font-bold transition-all"
           >
-            <Plus size={18} />
+            <Plus size={18} strokeWidth={2.5} />
           </button>
         ) : (
-          <div className="md:hidden p-2 rounded-xl bg-zinc-900 border border-panel-border text-zinc-600">
+          <div className="md:hidden p-2 rounded-xl bg-[#121218] border border-[#24242D] text-[#686873]">
             <Lock size={16} />
           </div>
         )}
@@ -133,13 +133,13 @@ export default function Header({
       <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto justify-between md:justify-end">
         
         {/* PLATFORMS FILTER */}
-        <div className="flex items-center gap-1 p-1 bg-panel-card rounded-xl border border-panel-border">
+        <div className="flex items-center gap-1 p-1 bg-[#121218] rounded-xl border border-[#24242D]">
           <button
             onClick={() => setActivePlatform('all')}
             className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
               activePlatform === 'all'
-                ? 'bg-zinc-800 text-white font-bold border border-zinc-700'
-                : 'text-zinc-400 hover:text-white'
+                ? 'bg-[#17171F] text-[#F2F2F5] font-semibold border border-[#24242D]'
+                : 'text-[#92929F] hover:text-[#F2F2F5]'
             }`}
           >
             {t('all', 'Todos')}
@@ -149,8 +149,8 @@ export default function Header({
             onClick={() => setActivePlatform('instagram')}
             className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg transition-all cursor-pointer ${
               activePlatform === 'instagram'
-                ? 'bg-accent-purple text-white font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white'
+                ? 'bg-[#8B5CF6]/20 border border-[#8B5CF6]/40 text-[#F2F2F5] font-semibold'
+                : 'text-[#92929F] hover:text-[#F2F2F5]'
             }`}
           >
             {renderPlatformSvg('instagram', 13)}
@@ -161,8 +161,8 @@ export default function Header({
             onClick={() => setActivePlatform('tiktok')}
             className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg transition-all cursor-pointer ${
               activePlatform === 'tiktok'
-                ? 'bg-white text-black font-bold shadow-md'
-                : 'text-zinc-400 hover:text-zinc-100'
+                ? 'bg-zinc-800 border border-zinc-700 text-white font-semibold'
+                : 'text-[#92929F] hover:text-[#F2F2F5]'
             }`}
           >
             {renderPlatformSvg('tiktok', 13)}
@@ -173,8 +173,8 @@ export default function Header({
             onClick={() => setActivePlatform('youtube')}
             className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg transition-all cursor-pointer ${
               activePlatform === 'youtube'
-                ? 'bg-accent-orange text-white font-bold shadow-md'
-                : 'text-zinc-400 hover:text-white'
+                ? 'bg-[#F97316]/20 border border-[#F97316]/40 text-[#F2F2F5] font-semibold'
+                : 'text-[#92929F] hover:text-[#F2F2F5]'
             }`}
           >
             {renderPlatformSvg('youtube', 13)}
@@ -183,13 +183,13 @@ export default function Header({
         </div>
 
         {/* FUNNEL STAGE FILTER */}
-        <div className="flex items-center gap-1 p-1 bg-panel-card rounded-xl border border-panel-border">
+        <div className="flex items-center gap-1 p-1 bg-[#121218] rounded-xl border border-[#24242D]">
           <button
             onClick={() => setActiveStage('all')}
             className={`text-[11px] px-2 py-1 rounded-lg transition-all cursor-pointer ${
               activeStage === 'all'
-                ? 'bg-zinc-800 text-white font-bold'
-                : 'text-zinc-400 hover:text-white'
+                ? 'bg-[#17171F] text-[#F2F2F5] font-semibold border border-[#24242D]'
+                : 'text-[#92929F] hover:text-[#F2F2F5]'
             }`}
           >
             Funil
@@ -201,8 +201,8 @@ export default function Header({
                 onClick={() => setActiveStage(stage)}
                 className={`text-[11px] font-mono px-2 py-1 rounded-lg transition-all cursor-pointer ${
                   activeStage === stage
-                    ? 'bg-zinc-800 text-white font-bold border border-zinc-700'
-                    : 'text-zinc-400 hover:text-zinc-200'
+                    ? 'bg-[#17171F] text-[#F2F2F5] font-semibold border border-[#24242D]'
+                    : 'text-[#92929F] hover:text-[#F2F2F5]'
                 }`}
               >
                 {stage}
@@ -215,7 +215,7 @@ export default function Header({
         <select
           value={activeFormat}
           onChange={(e) => setActiveFormat(e.target.value as ContentFormat | 'all')}
-          className="bg-panel-card text-zinc-300 border border-panel-border text-xs rounded-xl px-3 py-2 focus:outline-none cursor-pointer focus:border-zinc-500 capitalize"
+          className="bg-[#121218] text-[#F2F2F5] border border-[#24242D] text-xs rounded-xl px-3 py-2 focus:outline-none cursor-pointer focus:border-[#8B5CF6]/50 capitalize"
         >
           <option value="all">{t('formatFilter', 'Todos os Formatos')}</option>
           <option value="reels">Reels</option>
@@ -230,14 +230,14 @@ export default function Header({
         {canCreate ? (
           <button
             onClick={onNewPostClick}
-            className="hidden md:flex items-center gap-1.5 px-4 py-2 rounded-xl font-display font-bold text-xs bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-90 shadow-md transition-all cursor-pointer"
+            className="hidden md:flex items-center gap-1.5 px-4 py-2 rounded-xl font-display font-bold text-xs bg-white text-black hover:bg-zinc-100 shadow-sm transition-all cursor-pointer"
           >
             <Plus size={16} strokeWidth={2.5} />
             <span>{t('planContent', 'Planejar Conteúdo')}</span>
           </button>
         ) : (
-          <div className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900 border border-panel-border text-zinc-500 text-xs font-mono select-none">
-            <Lock size={13} className="text-zinc-500" />
+          <div className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#121218] border border-[#24242D] text-[#686873] text-xs font-mono select-none">
+            <Lock size={13} className="text-[#686873]" />
             <span>Criação Bloqueada</span>
           </div>
         )}

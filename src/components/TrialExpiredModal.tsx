@@ -107,7 +107,7 @@ export default function TrialExpiredModal({
               onClose();
               onOpenPricing();
             }}
-            className="w-full py-3 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-95 shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full py-3 px-4 rounded-xl font-bold text-sm bg-[#8B5CF6] hover:bg-[#7C3AED] text-white shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
           >
             <CreditCard size={18} />
             <span>Ativar Assinatura & Desbloquear Edição</span>

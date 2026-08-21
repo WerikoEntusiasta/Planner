@@ -311,12 +311,12 @@ export default function TeamModal({
           editCards: true,
           deleteCards: false,
           manageClients: false,
-          useAI: false,
+          useAI: true, // Designer com IA para gerar roteiros e textos de carrosséis
           viewMetrics: false,
           manageCampaigns: false,
           manageBrandKit: true,
           productionPipeline: true,
-          creativeHub: true,
+          creativeHub: true, // Central de criativos liberada
           clientApproval: true,
           manageIntegrations: false,
           exportData: true

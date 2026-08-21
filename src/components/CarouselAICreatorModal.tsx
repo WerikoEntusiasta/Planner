@@ -879,7 +879,7 @@ export default function CarouselAICreatorModal({
               <button
                 type="submit"
                 disabled={!topic.trim() || isGenerating}
-                className="w-full py-3.5 px-4 bg-gradient-to-r from-accent-purple to-purple-600 hover:from-purple-600 hover:to-accent-purple text-white text-xs font-bold rounded-xl shadow-lg shadow-purple-900/30 border border-purple-500/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
+                className="w-full py-3.5 px-4 bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-xs font-semibold rounded-xl shadow-sm border border-purple-500/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
               >
                 {isGenerating ? (
                   <>

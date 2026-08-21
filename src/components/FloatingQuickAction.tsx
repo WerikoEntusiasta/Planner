@@ -29,10 +29,10 @@ export default function FloatingQuickAction({
               setIsOpen(false);
               onNewPost();
             }}
-            className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-accent-purple to-accent-orange text-white text-xs font-bold shadow-xl hover:opacity-90 transition-all cursor-pointer border border-white/10 group"
+            className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-white hover:bg-zinc-100 text-black text-xs font-bold shadow-xl transition-all cursor-pointer border border-zinc-200 group"
           >
-            <span className="font-medium group-hover:underline">Criar Post / Roteiro</span>
-            <div className="p-1 rounded-lg bg-white/20">
+            <span className="font-semibold group-hover:underline">Criar Post / Roteiro</span>
+            <div className="p-1 rounded-lg bg-black/10 text-black">
               <Plus size={14} strokeWidth={3} />
             </div>
           </button>
@@ -87,7 +87,7 @@ export default function FloatingQuickAction({
         className={`p-3.5 rounded-2xl shadow-2xl transition-all duration-300 flex items-center justify-center cursor-pointer border border-white/20 ${
           isOpen
             ? 'bg-zinc-800 text-white rotate-45 hover:bg-zinc-700 scale-105 ring-4 ring-accent-purple/30'
-            : 'bg-gradient-to-tr from-accent-purple via-pink-500 to-accent-orange text-white hover:scale-110 active:scale-95 shadow-accent-purple/30'
+            : 'bg-[#8B5CF6] hover:bg-[#7C3AED] text-white hover:scale-110 active:scale-95 shadow-lg'
         }`}
         title={isOpen ? "Fechar Menu Rápido" : "Ações Rápidas (+ Criar)"}
       >

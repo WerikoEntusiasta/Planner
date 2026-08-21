@@ -121,7 +121,7 @@ export default function TrialStatusBanner({
             {/* Subscribe CTA */}
             <button
               onClick={onOpenPricingModal}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-gradient-to-r from-accent-purple to-accent-orange hover:opacity-95 text-white text-xs font-bold transition-all shadow-lg shadow-purple-900/30 cursor-pointer"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-xs font-semibold transition-all shadow-sm cursor-pointer"
             >
               <CreditCard size={14} />
               <span>Ativar Assinatura & Desbloquear</span>

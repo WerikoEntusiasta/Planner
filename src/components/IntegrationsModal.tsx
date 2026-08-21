@@ -263,7 +263,7 @@ export default function IntegrationsModal({ isOpen, onClose, userId, userEmail }
                 <button
                   onClick={handleConnectFacebook}
                   disabled={isLoading}
-                  className="w-full md:w-auto px-5 py-3 rounded-xl bg-gradient-to-r from-accent-purple to-accent-orange hover:opacity-95 text-white font-bold text-xs flex items-center justify-center gap-2.5 shadow-lg transition-all cursor-pointer hover:scale-[1.02] disabled:opacity-50"
+                  className="w-full md:w-auto px-5 py-3 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-white font-semibold text-xs flex items-center justify-center gap-2.5 shadow-sm transition-all cursor-pointer disabled:opacity-50"
                 >
                   {isLoading ? (
                     <>

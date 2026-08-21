@@ -341,7 +341,7 @@ export default function PaymentSuccessPage({
           <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
             <button
               onClick={onGoToPlanner}
-              className="w-full sm:w-auto px-6 py-3.5 rounded-xl font-display font-extrabold text-xs bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-90 transition-all cursor-pointer shadow-lg flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-3.5 rounded-xl font-display font-bold text-xs bg-[#8B5CF6] hover:bg-[#7C3AED] text-white transition-all cursor-pointer shadow-sm flex items-center justify-center gap-2"
             >
               <span>{t('goToPlanner', 'Acessar Meu Planner de Conteúdo')}</span>
               <ArrowRight size={16} />

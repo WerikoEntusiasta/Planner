@@ -79,7 +79,9 @@ export interface Post {
   hashtags?: string[];
   hookText?: string;
   scriptText?: string;
+  ctaText?: string;
   visualIdea?: string;
+  coverThumbnail?: string;
   approvalStatus?: 'draft' | 'pending' | 'approved' | 'rejected';
   approvalFeedback?: string;
   approvalDate?: string;
