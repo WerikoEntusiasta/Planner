@@ -37,7 +37,7 @@ export default function SupportModal({ isOpen, onClose, currentUser }: SupportMo
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) return;
 
@@ -53,6 +53,29 @@ export default function SupportModal({ isOpen, onClose, currentUser }: SupportMo
       status: 'pending',
       createdAt: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
     };
+
+    try {
+      const userToken = localStorage.getItem('planner_user_token') || '';
+      await fetch('/api/support/tickets', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id,
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+        },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          userName: currentUser.name,
+          userEmail: currentUser.email,
+          subject: title.trim(),
+          message: description.trim(),
+          category,
+          priority
+        })
+      });
+    } catch (err) {
+      console.error('Server offline, saving support ticket locally:', err);
+    }
 
     try {
       const allTickets: SupportTicket[] = JSON.parse(localStorage.getItem('creator_planner_tickets') || '[]');

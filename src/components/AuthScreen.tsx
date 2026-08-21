@@ -69,6 +69,9 @@ export default function AuthScreen({ onLogin, onEnterAdminMode }: AuthScreenProp
         const data = await res.json();
         
         if (data.success && data.user) {
+          if (data.token) {
+            localStorage.setItem('planner_user_token', data.token);
+          }
           setSuccess('Login realizado com sucesso! Carregando seu painel seguro...');
           
           // Also sync to localStorage registered users as local fallback
@@ -124,6 +127,9 @@ export default function AuthScreen({ onLogin, onEnterAdminMode }: AuthScreenProp
         const data = await res.json();
 
         if (data.success && data.user) {
+          if (data.token) {
+            localStorage.setItem('planner_user_token', data.token);
+          }
           setSuccess('Sua conta foi criada em conformidade com a LGPD! Fazendo login seguro...');
           
           // Sync local storage list of registered users for local reference

@@ -123,6 +123,24 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const envAdminEmail = (import.meta as any).env.VITE_ADMIN_EMAIL;
   const envAdminPassword = (import.meta as any).env.VITE_ADMIN_PASSWORD;
 
+  // Admin Auth Headers Helper
+  const getAdminAuthHeaders = (extraHeaders: Record<string, string> = {}) => {
+    const token = localStorage.getItem('planner_admin_token') || sessionStorage.getItem('planner_admin_token') || '';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...extraHeaders
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['x-admin-token'] = token;
+    }
+    const envEmail = (import.meta as any).env.VITE_ADMIN_EMAIL || 'admin@planner.com';
+    const envPass = (import.meta as any).env.VITE_ADMIN_PASSWORD || 'admin123';
+    headers['x-admin-email'] = envEmail;
+    headers['x-admin-password'] = envPass;
+    return headers;
+  };
+
   // Initial Data Fetch
   const fetchAllData = async () => {
     fetchMetrics();
@@ -160,7 +178,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       if (base64) {
         await fetch('/api/admin/slider-images', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAdminAuthHeaders(),
           body: JSON.stringify({ url: base64, name, order: slideImages.length })
         });
         fetchSliderImages();
@@ -170,7 +188,10 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   };
 
   const handleSliderDelete = async (id: string) => {
-    await fetch(`/api/admin/slider-images/${id}`, { method: 'DELETE' });
+    await fetch(`/api/admin/slider-images/${id}`, {
+      method: 'DELETE',
+      headers: getAdminAuthHeaders()
+    });
     fetchSliderImages();
   };
 
@@ -178,7 +199,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const fetchMetrics = async () => {
     try {
       setIsLoadingMetrics(true);
-      const res = await fetch('/api/admin/metrics');
+      const res = await fetch('/api/admin/metrics', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success && data.metrics) {
         setMetrics(data.metrics);
@@ -193,7 +216,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const fetchAdminUsers = async () => {
     try {
       setIsLoadingUsers(true);
-      const res = await fetch('/api/admin/users');
+      const res = await fetch('/api/admin/users', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.users)) {
         setAdminUsers(data.users);
@@ -208,7 +233,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const fetchCoupons = async () => {
     try {
       setIsLoadingCoupons(true);
-      const res = await fetch('/api/coupons');
+      const res = await fetch('/api/coupons', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.coupons)) {
         setCoupons(data.coupons);
@@ -223,7 +250,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const fetchTickets = async () => {
     try {
       setIsLoadingTickets(true);
-      const res = await fetch('/api/admin/tickets');
+      const res = await fetch('/api/admin/tickets', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.tickets)) {
         setTickets(data.tickets);
@@ -238,7 +267,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const fetchAnnouncements = async () => {
     try {
       setIsLoadingAnnouncements(true);
-      const res = await fetch('/api/admin/announcements');
+      const res = await fetch('/api/admin/announcements', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.announcements)) {
         setAnnouncements(data.announcements);
@@ -253,7 +284,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const fetchAuditLogs = async () => {
     try {
       setIsLoadingLogs(true);
-      const res = await fetch('/api/admin/audit-logs');
+      const res = await fetch('/api/admin/audit-logs', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success && Array.isArray(data.logs)) {
         setAuditLogs(data.logs);
@@ -267,7 +300,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
 
   const fetchStripeConfig = async () => {
     try {
-      const res = await fetch('/api/stripe/config');
+      const res = await fetch('/api/admin/stripe-config', {
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success) {
         setIsStripeActive(data.isConfigured);
@@ -286,7 +321,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       setIsSubmittingUser(true);
       const res = await fetch('/api/admin/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({
           name: newUserName.trim(),
           email: newUserEmail.trim(),
@@ -320,7 +355,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       setIsUpdatingPlan(true);
       const res = await fetch(`/api/admin/users/${editingUser.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({ plan: targetPlan })
       });
       const data = await res.json();
@@ -342,7 +377,10 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const handleDeleteUser = async (userId: string, email: string) => {
     if (!window.confirm(`Tem certeza que deseja excluir permanentemente o usuário "${email}" e todas as suas marcas e postagens?`)) return;
     try {
-      const res = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success) {
         fetchAdminUsers();
@@ -373,7 +411,10 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   // Coupons Actions
   const handleToggleCoupon = async (couponId: string) => {
     try {
-      const res = await fetch(`/api/coupons/${couponId}/toggle`, { method: 'PATCH' });
+      const res = await fetch(`/api/coupons/${couponId}/toggle`, {
+        method: 'PATCH',
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success) {
         setCoupons(prev => prev.map(c => c.id === couponId ? { ...c, isActive: data.isActive } : c));
@@ -387,7 +428,10 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
   const handleDeleteCoupon = async (couponId: string, code: string) => {
     if (!window.confirm(`Excluir cupom "${code}"?`)) return;
     try {
-      const res = await fetch(`/api/coupons/${couponId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/coupons/${couponId}`, {
+        method: 'DELETE',
+        headers: getAdminAuthHeaders()
+      });
       const data = await res.json();
       if (data.success) {
         setCoupons(prev => prev.filter(c => c.id !== couponId));
@@ -408,7 +452,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       setIsSavingCoupon(true);
       const res = await fetch('/api/coupons', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({
           code: cleanCode,
           discountType: formDiscountType,
@@ -456,7 +500,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       setIsSubmittingReply(ticketId);
       const res = await fetch(`/api/admin/tickets/${ticketId}/reply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({ message: msg, adminName: 'Suporte Oficial Planner' })
       });
       const data = await res.json();
@@ -476,7 +520,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
     try {
       const res = await fetch(`/api/admin/tickets/${ticketId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({ status })
       });
       const data = await res.json();
@@ -497,7 +541,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       setIsSubmittingAnn(true);
       const res = await fetch('/api/admin/announcements', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({
           title: annTitle.trim(),
           message: annMessage.trim(),
@@ -526,7 +570,10 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
 
   const handleDeleteAnnouncement = async (id: string) => {
     try {
-      await fetch(`/api/admin/announcements/${id}`, { method: 'DELETE' });
+      await fetch(`/api/admin/announcements/${id}`, {
+        method: 'DELETE',
+        headers: getAdminAuthHeaders()
+      });
       fetchAnnouncements();
       fetchAuditLogs();
     } catch (e) {}
@@ -538,9 +585,9 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
     try {
       setIsSavingStripe(true);
       setStripeAdminMsg(null);
-      const res = await fetch('/api/stripe/config', {
+      const res = await fetch('/api/admin/stripe-config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({
           secretKey: stripeSecretKey.trim() || undefined,
           publishableKey: stripePublishableKey.trim() || undefined,
@@ -568,7 +615,7 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
       setWebhookTestResult('loading');
       const res = await fetch('/api/admin/test-webhook', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminAuthHeaders(),
         body: JSON.stringify({
           eventType: 'checkout.session.completed',
           email: webhookTestEmail,
@@ -642,15 +689,37 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
             <p className="text-xs text-zinc-400">Entre com as credenciais administrativas do SaaS</p>
           </div>
 
-          <form onSubmit={(e) => {
+          <form onSubmit={async (e) => {
             e.preventDefault();
-            const correctEmail = envAdminEmail || 'admin@planner.com';
-            const correctPass = envAdminPassword || 'admin123';
-            if (adminEmail.trim().toLowerCase() === correctEmail.toLowerCase() && adminPassword === correctPass) {
-              setIsAdminLoggedIn(true);
-              setLoginError('');
-            } else {
-              setLoginError('Credenciais administrativas inválidas.');
+            setLoginError('');
+            try {
+              const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: adminEmail.trim(), password: adminPassword })
+              });
+              const data = await res.json();
+              if (data.success && data.isAdmin) {
+                if (data.adminToken) {
+                  localStorage.setItem('planner_admin_token', data.adminToken);
+                }
+                setIsAdminLoggedIn(true);
+                setLoginError('');
+                fetchAllData();
+              } else {
+                setLoginError(data.error || 'Credenciais administrativas inválidas.');
+              }
+            } catch (err: any) {
+              // Fallback to local check if offline
+              const correctEmail = envAdminEmail || 'admin@planner.com';
+              const correctPass = envAdminPassword || 'admin123';
+              if (adminEmail.trim().toLowerCase() === correctEmail.toLowerCase() && adminPassword === correctPass) {
+                setIsAdminLoggedIn(true);
+                setLoginError('');
+                fetchAllData();
+              } else {
+                setLoginError('Credenciais administrativas inválidas.');
+              }
             }
           }} className="space-y-4">
             <div className="space-y-1">

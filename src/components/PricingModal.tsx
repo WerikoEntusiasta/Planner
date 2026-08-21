@@ -43,9 +43,7 @@ export default function PricingModal({
         <PricingSection
           userEmail={currentUser?.email || ''}
           userName={currentUser?.name || ''}
-          onSelectPlan={(plan) => {
-            if (onPlanUpdated) onPlanUpdated(plan);
-          }}
+          userId={currentUser?.id || ''}
         />
       </motion.div>
     </div>

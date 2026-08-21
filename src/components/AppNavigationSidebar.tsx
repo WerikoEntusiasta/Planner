@@ -10,12 +10,13 @@ import LanguageSelector from './LanguageSelector';
 import { 
   Calendar, Grid, Layers, Plus, Sparkles, ChevronDown, UserPlus, LogOut, 
   Users, Edit3, LifeBuoy, Shield, BarChart2, Palette, Hash, Rocket, 
-  Bookmark, Workflow, Menu, X, CheckCircle2, Target, TrendingUp 
+  Bookmark, Workflow, Menu, X, CheckCircle2, Target, TrendingUp,
+  Image as ImageIcon
 } from 'lucide-react';
 
 interface AppNavigationSidebarProps {
-  activeView: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai';
-  setActiveView: (v: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai') => void;
+  activeView: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai' | 'editor' | 'creatives';
+  setActiveView: (v: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai' | 'editor' | 'creatives') => void;
   onNewPostClick: () => void;
   
   // Client props
@@ -110,6 +111,7 @@ export default function AppNavigationSidebar({
     { id: 'calendar', label: t('editorialCalendar', 'Calendário Mensal'), icon: Calendar, color: 'text-white' },
     { id: 'kanban', label: t('viewBoard', 'Board Kanban'), icon: Layers, color: 'text-accent-orange' },
     { id: 'pipeline', label: 'Pipeline de Produção', icon: Workflow, color: 'text-blue-400' },
+    { id: 'creatives', label: 'Central de Criativos', icon: ImageIcon, color: 'text-pink-400' },
     { id: 'dashboard', label: t('viewDashboard', 'Dashboard de Métricas'), icon: BarChart2, color: 'text-emerald-400' },
   ];
 

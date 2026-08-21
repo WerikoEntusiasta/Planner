@@ -20,6 +20,8 @@ import TeamModal from './components/TeamModal';
 import PaymentSuccessPage from './components/PaymentSuccessPage';
 import PaymentCancelledPage from './components/PaymentCancelledPage';
 import ClientApprovalPage from './components/ClientApprovalPage';
+import ClientCreativeApprovalPage from './components/ClientCreativeApprovalPage';
+import CreativeHubView from './components/CreativeHubView';
 import SupportModal from './components/SupportModal';
 import LGPDModal from './components/LGPDModal';
 import DemoNoticeModal from './components/DemoNoticeModal';
@@ -47,7 +49,7 @@ export default function App() {
   const [activeClientId, setActiveClientId] = useState<string>('');
 
   // View & Modals States
-  const [activeView, setActiveView] = useState<'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'editor' | 'carousel-ai'>('grid');
+  const [activeView, setActiveView] = useState<'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'editor' | 'carousel-ai' | 'creatives'>('grid');
   const [isCampaignsModalOpen, setIsCampaignsModalOpen] = useState(false);
   const [isReferenceHubModalOpen, setIsReferenceHubModalOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -196,12 +198,14 @@ export default function App() {
   const syncToDatabase = async (currentUsers: User[], currentClients: Client[], currentPosts: Post[], currentGoals: WeeklyGoal[], extraMeta: any = {}) => {
     if (!currentUser || currentUser.id === 'demo_user') return;
     try {
+      const userToken = localStorage.getItem('planner_user_token') || '';
       const response = await fetch('/api/sync', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-user-id': currentUser.id,
           'x-user-password': currentUser.password || '',
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
         },
         body: JSON.stringify({
           users: currentUsers,
@@ -220,6 +224,7 @@ export default function App() {
           console.error('Session expired, logging out.');
           setCurrentUser(null);
           localStorage.removeItem('creator_planner_logged_in_user');
+          localStorage.removeItem('planner_user_token');
           window.location.reload();
         } else {
           console.error('Failed to sync to server database:', resData.error);
@@ -269,10 +274,12 @@ export default function App() {
 
     const loadData = async () => {
       try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
         const response = await fetch('/api/data', {
           headers: {
             'x-user-id': currentUser.id,
             'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
           }
         });
         const resData = await response.json();
@@ -361,10 +368,12 @@ export default function App() {
     
     const interval = setInterval(async () => {
       try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
         const response = await fetch('/api/data', {
           headers: {
             'x-user-id': currentUser.id,
             'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
           }
         });
         const resData = await response.json();
@@ -891,11 +900,13 @@ export default function App() {
   const handleDeleteAccount = async (): Promise<boolean> => {
     if (!currentUser) return false;
     try {
+      const userToken = localStorage.getItem('planner_user_token') || '';
       const response = await fetch('/api/auth/delete-account', {
         method: 'POST',
         headers: {
           'x-user-id': currentUser.id,
           'x-user-password': currentUser.password || '',
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
         }
       });
       const data = await response.json();
@@ -920,6 +931,21 @@ export default function App() {
   // View routing triggers
   const queryParams = new URLSearchParams(window.location.search);
   const approvePostId = queryParams.get('approvePostId');
+  const creativeToken = queryParams.get('creativeToken') || queryParams.get('shareToken') || queryParams.get('token');
+  const isCreativeApprovalUrl = window.location.pathname.includes('/aprovar-criativo') || (window.location.pathname.includes('/aprovar') && creativeToken);
+
+  // Creative Client Approval Portal
+  if (creativeToken || isCreativeApprovalUrl) {
+    return (
+      <ClientCreativeApprovalPage 
+        shareToken={creativeToken || window.location.pathname.split('/').pop() || ''} 
+        onBackToApp={currentUser ? () => {
+          window.history.replaceState({}, '', '/');
+          window.location.reload();
+        } : undefined}
+      />
+    );
+  }
 
   // Check SEO routes
   const seoView = SeoRouter({
@@ -1010,7 +1036,11 @@ export default function App() {
         onCreateClient={handleCreateClient}
         onRenameClient={handleRenameClient}
         currentUser={currentUser}
-        onLogout={() => setCurrentUser(null)}
+        onLogout={() => {
+          localStorage.removeItem('planner_user_token');
+          localStorage.removeItem('creator_planner_logged_in_user');
+          setCurrentUser(null);
+        }}
         onOpenTeamModal={() => setIsTeamModalOpen(true)}
         onOpenSupportModal={() => setIsSupportModalOpen(true)}
         onOpenLGPDModal={() => setIsLGPDModalOpen(true)}
@@ -1332,6 +1362,15 @@ export default function App() {
                   setEditPostTarget(newPost);
                   setActiveView('editor');
                 }}
+              />
+            )}
+
+            {activeView === 'creatives' && (
+              <CreativeHubView
+                clients={userClients}
+                activeClientId={activeClientId}
+                currentUser={currentUser}
+                onOpenPricing={() => setIsPricingModalOpen(true)}
               />
             )}
           </div>

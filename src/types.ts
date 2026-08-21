@@ -203,4 +203,38 @@ export interface AdminUserItem {
   postCount: number;
 }
 
+export type CreativeFormat = 'carousel' | 'single_image' | 'video' | 'reels_story';
+export type CreativeStatus = 'draft' | 'pending_approval' | 'approved' | 'changes_requested' | 'rejected';
+
+export interface CreativeAsset {
+  id: string;
+  name: string;
+  url: string;
+  type: 'image' | 'video';
+  size?: number; // Size in bytes
+  format?: string; // e.g. png, jpg, mp4, mov, webm
+  order: number; // 0 to 19 for carousels
+  title?: string;
+  caption?: string;
+}
+
+export interface Creative {
+  id: string;
+  userId: string;
+  clientId: string;
+  clientName?: string;
+  title: string;
+  description?: string;
+  format: CreativeFormat;
+  platform: Platform | 'all' | 'facebook' | 'linkedin' | 'pinterest';
+  status: CreativeStatus;
+  assets: CreativeAsset[];
+  aspectRatio?: '1:1' | '4:5' | '9:16' | '16:9';
+  shareToken: string;
+  clientFeedback?: string;
+  approvalDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 

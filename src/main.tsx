@@ -4,13 +4,17 @@ import App from './App.tsx';
 import './index.css';
 import { LanguageProvider } from './i18n/LanguageContext.tsx';
 import { HelmetProvider } from 'react-helmet-async';
+import ErrorBoundary from './components/ErrorBoundary.tsx';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <HelmetProvider>
-      <LanguageProvider>
-        <App />
-      </LanguageProvider>
-    </HelmetProvider>
+    <ErrorBoundary>
+      <HelmetProvider>
+        <LanguageProvider>
+          <App />
+        </LanguageProvider>
+      </HelmetProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );
+

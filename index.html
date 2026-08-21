@@ -14,14 +14,29 @@
     <!-- Open Graph / Facebook / WhatsApp -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://planner.amplificagroup.com/" />
+    <meta property="og:site_name" content="Planner SaaS — Conteúdo &amp; Roteiros" />
     <meta property="og:title" content="Planner de Conteúdo Multicanal — Organização e IA para Creators" />
-    <meta property="og:description" content="Planeje, crie roteiros com IA e agende seus vídeos no YouTube, Instagram e TikTok em um só lugar. Organize seu calendário e aprove com clientes. Teste grátis!" />
+    <meta property="og:description" content="Planeje, crie roteiros com IA e agende seus vídeos no YouTube, Instagram e TikTok em um só lugar. Organize seu calendário e aprove com clientes. Teste grátis 15 dias!" />
     <meta property="og:locale" content="pt_BR" />
+    <meta property="og:image" content="https://planner.amplificagroup.com/og-image.png" />
+    <meta property="og:image:secure_url" content="https://planner.amplificagroup.com/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Planner de Conteúdo Multicanal e Roteiros com IA" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Planner de Conteúdo Multicanal" />
-    <meta name="twitter:description" content="Planeje, crie roteiros com IA e agende seus vídeos no YouTube, Instagram e TikTok em um só lugar. Organize seu calendário e aprove com clientes. Teste grátis!" />
+    <meta name="twitter:description" content="Planeje, crie roteiros com IA e agende seus vídeos no YouTube, Instagram e TikTok em um só lugar. Organize seu calendário e aprove com clientes. Teste grátis 15 dias!" />
+    <meta name="twitter:image" content="https://planner.amplificagroup.com/og-image.png" />
+    <meta name="twitter:image:alt" content="Planner de Conteúdo Multicanal e Roteiros com IA" />
+
+    <!-- Favicons & App Icons -->
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
     <!-- JSON-LD Structured Data for Google & AI -->
     <script type="application/ld+json">
@@ -64,9 +79,11 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      if ('serviceWorker' in navigator) {
+      if ('serviceWorker' in navigator && window.location.protocol === 'https:' && !window.location.hostname.includes('localhost')) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/service-worker.js');
+          navigator.serviceWorker.register('/service-worker.js').catch(function(err) {
+            console.warn('SW registration bypassed:', err);
+          });
         });
       }
     </script>

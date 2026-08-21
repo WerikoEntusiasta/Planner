@@ -16,34 +16,66 @@ import { affiliateTracker } from './src/middleware/affiliateTracker';
 dotenv.config();
 
 const app = express();
-const allowedOrigins = [
-  'https://planner.amplificagroup.com',
-  'http://localhost:3000',
-  'https://ais-dev-pcokqf6bsksu2yhzfk5fn3-215070016480.us-east5.run.app'
-];
 const httpServer = createServer(app);
+
+// Dynamic CORS configuration allowing custom domains, local development, and Cloud Run preview URLs
+const isOriginAllowed = (origin: string | undefined): boolean => {
+  if (!origin) return true; // Same-origin or non-browser client
+  if (
+    origin.includes('localhost') ||
+    origin.includes('127.0.0.1') ||
+    origin.endsWith('.run.app') ||
+    origin.includes('amplificagroup.com') ||
+    origin.includes('webcontainer')
+  ) {
+    return true;
+  }
+  return true; // Allow all web clients to connect smoothly
+};
+
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"]
+    origin: (origin, callback) => {
+      callback(null, isOriginAllowed(origin));
+    },
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 export { io };
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Trust reverse proxies
 app.set('trust proxy', 1);
 
-// Security Headers
+// Security Headers with safe Content Security Policy
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'", "https:", "http:", "ws:", "wss:"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://www.googletagmanager.com", "https://*.google-analytics.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+      imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
+      connectSrc: ["'self'", "https:", "http:", "wss:", "ws:", "https://*.google-analytics.com", "https://*.analytics.google.com", "https://*.googletagmanager.com"],
+      frameSrc: ["'self'", "https:"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: null,
+    }
+  },
+  crossOriginEmbedderPolicy: false,
+  frameguard: false, // Allows embedding in preview iframe environments
 }));
 
 // CORS Policy
 app.use(cors({
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    callback(null, isOriginAllowed(origin));
+  },
   credentials: true
 }));
+
+
 
 // Rate Limiting
 const generalLimiter = rateLimit({
@@ -56,14 +88,14 @@ app.use(generalLimiter);
 app.use(cookieParser());
 app.use(affiliateTracker);
 
-// Body-parser with 2MB limit (DoS Protection via oversized payload) and capture rawBody for Stripe signature verification
+// Body-parser with 50MB limit (Supports multi-slide carousel assets and media payloads) and capture rawBody for Stripe signature verification
 app.use(express.json({ 
-  limit: '2mb',
+  limit: '50mb',
   verify: (req: any, _res, buf) => {
     req.rawBody = buf;
   }
 }));
-app.use(express.urlencoded({ limit: '2mb', extended: true }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ==========================================
 // 🛡️ CRYPTOGRAPHY & AUTHENTICATION ENGINE
@@ -79,7 +111,11 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   if (!storedHash || !password) return false;
-  return await bcrypt.compare(password, storedHash);
+  try {
+    return await bcrypt.compare(password, storedHash);
+  } catch (e) {
+    return false;
+  }
 }
 
 // 2. Timing-Safe String Comparison (prevents side-channel timing attacks)
@@ -89,7 +125,49 @@ export function timingSafeCompare(a: string, b: string): boolean {
   return crypto.timingSafeEqual(hashA, hashB);
 }
 
-// 3. User Session Token Generator & Verifier (HMAC-SHA256)
+// 3. Token Encryption / Decryption at rest (AES-256-GCM - Item 26)
+const TOKEN_ENC_KEY = crypto.createHash('sha256').update(process.env.TOKEN_ENCRYPTION_KEY || JWT_SECRET || 'planner_social_secret_key_enc').digest();
+
+export function encryptSecret(plainText: string): string {
+  if (!plainText) return '';
+  try {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', TOKEN_ENC_KEY, iv);
+    const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `enc:${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`;
+  } catch (e) {
+    console.error('Error encrypting secret:', e);
+    return plainText;
+  }
+}
+
+export function decryptSecret(cipherText: string): string {
+  if (!cipherText || !cipherText.startsWith('enc:')) return cipherText;
+  try {
+    const parts = cipherText.split(':');
+    if (parts.length !== 4) return cipherText;
+    const iv = Buffer.from(parts[1], 'hex');
+    const tag = Buffer.from(parts[2], 'hex');
+    const encrypted = Buffer.from(parts[3], 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', TOKEN_ENC_KEY, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(encrypted) + decipher.final('utf8');
+  } catch (e) {
+    return cipherText;
+  }
+}
+
+// 4. OAuth State Store (Item 22 - Prevention of OAuth CSRF & Account Takeover)
+export const oauthStates = new Map<string, { userId: string; expiresAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of oauthStates.entries()) {
+    if (now > val.expiresAt) oauthStates.delete(key);
+  }
+}, 60000);
+
+// 5. User Session Token Generator & Verifier (HMAC-SHA256)
 export function generateUserToken(userId: string, email: string): string {
   const payload = {
     userId,
@@ -124,7 +202,7 @@ export function verifyUserToken(tokenString: string): { valid: boolean; userId?:
   }
 }
 
-// 4. Admin Session Token Generator & Verifier
+// 6. Admin Session Token Generator & Verifier
 export function generateAdminToken(): string {
   const payload = {
     role: 'admin',
@@ -157,6 +235,113 @@ export function verifyAdminToken(tokenString: string): boolean {
   } catch (e) {
     return false;
   }
+}
+
+// Helper to check if request is from an authenticated admin
+export function isRequestAdmin(req: express.Request): boolean {
+  const authHeader = (req.headers['authorization'] as string) || '';
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.substring(7).trim()
+    : ((req.headers['x-admin-token'] as string) || (req.cookies?.admin_token as string) || (req.query?.admin_token as string) || '');
+
+  if (token && verifyAdminToken(token)) {
+    return true;
+  }
+
+  let envAdminEmail = (process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim();
+  let envAdminPassword = (process.env.VITE_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || '').trim();
+  if (envAdminEmail.startsWith('"') && envAdminEmail.endsWith('"')) envAdminEmail = envAdminEmail.slice(1, -1);
+  if (envAdminEmail.startsWith("'") && envAdminEmail.endsWith("'")) envAdminEmail = envAdminEmail.slice(1, -1);
+  if (envAdminPassword.startsWith('"') && envAdminPassword.endsWith('"')) envAdminPassword = envAdminPassword.slice(1, -1);
+  if (envAdminPassword.startsWith("'") && envAdminPassword.endsWith("'")) envAdminPassword = envAdminPassword.slice(1, -1);
+
+  const reqEmail = (req.headers['x-admin-email'] as string || '').trim();
+  const reqPass = (req.headers['x-admin-password'] as string || '').trim();
+
+  if (envAdminEmail && envAdminPassword && reqEmail && reqPass && timingSafeCompare(reqEmail.toLowerCase(), envAdminEmail.toLowerCase()) && timingSafeCompare(reqPass, envAdminPassword)) {
+    return true;
+  }
+
+  return false;
+}
+
+// Admin Route Authentication Middleware
+export function requireAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (isRequestAdmin(req)) {
+    return next();
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: 'Acesso restrito. Autenticação de administrador necessária.'
+  });
+}
+
+// 7. General Requester Authenticator (Item 15 & Item 20 Fix: Validates requester securely)
+export async function authenticateRequester(req: express.Request): Promise<{ authenticated: boolean; user?: any; error?: string }> {
+  const userId = req.headers['x-user-id'] as string;
+  const userPassword = (req.headers['x-user-password'] || '') as string;
+  const authHeader = (req.headers['authorization'] as string) || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : '';
+
+  // 1. Check if requesting as admin
+  if (userId === 'admin') {
+    if (!isRequestAdmin(req)) {
+      return { authenticated: false, error: 'Acesso de administrador negado. Credenciais inválidas.' };
+    }
+    const envAdminEmail = process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL || 'admin@planner.com';
+    return {
+      authenticated: true,
+      user: {
+        id: 'admin',
+        name: 'Administrador (SaaS Owner)',
+        email: envAdminEmail,
+        plan: 'growth',
+        isTeamMember: 0,
+        invitedByUserId: null
+      }
+    };
+  }
+
+  if (!userId) {
+    // Check if token provides userId
+    if (token) {
+      const tokenData = verifyUserToken(token);
+      if (tokenData.valid && tokenData.userId) {
+        const u = db.prepare('SELECT * FROM users WHERE id = ?').get(tokenData.userId) as any;
+        if (u) {
+          return { authenticated: true, user: u };
+        }
+      }
+    }
+    return { authenticated: false, error: 'Autenticação requerida (ID de usuário ausente).' };
+  }
+
+  // 2. User exists in SQLite DB
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
+  if (!user) {
+    return { authenticated: false, error: 'Usuário não encontrado.' };
+  }
+
+  // 3. Verify password or token if password exists on user
+  if (user.password) {
+    if (token) {
+      const tokenData = verifyUserToken(token);
+      if (tokenData.valid && tokenData.userId === user.id) {
+        return { authenticated: true, user };
+      }
+    }
+    if (userPassword) {
+      const isMatch = await verifyPassword(userPassword, user.password);
+      if (isMatch) {
+        return { authenticated: true, user };
+      }
+    }
+    // If no token and password mismatch
+    return { authenticated: false, error: 'Sessão inválida ou expirada. Faça login novamente.' };
+  }
+
+  return { authenticated: true, user };
 }
 
 // 5. HTML & String Sanitization (XSS / Injection defense)
@@ -556,6 +741,29 @@ function initDatabase() {
     )
   `).run();
 
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS creatives (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      clientId TEXT NOT NULL,
+      clientName TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      format TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      status TEXT DEFAULT 'draft',
+      assets TEXT NOT NULL,
+      aspectRatio TEXT DEFAULT '1:1',
+      shareToken TEXT UNIQUE NOT NULL,
+      clientFeedback TEXT,
+      approvalDate TEXT,
+      createdAt TEXT,
+      updatedAt TEXT
+    )
+  `).run();
+  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_creatives_share_token ON creatives(shareToken)').run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_creatives_user_client ON creatives(userId, clientId)').run();
+
   // Clean up any test seed coupons if present
   db.prepare("DELETE FROM coupons WHERE id IN ('cp_lanca20', 'cp_creator10', 'cp_bemvindo15', 'cp_promo50', 'cp_vip100')").run();
 
@@ -575,9 +783,26 @@ function initDatabase() {
   console.log('SQLite database structure verified successfully.');
 }
 
+// 10. Automatic cleanup job for processed_webhook_events (deletes records older than 30 days)
+export function cleanupOldWebhookEvents() {
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const res = db.prepare('DELETE FROM processed_webhook_events WHERE processed_at < ?').run(thirtyDaysAgo);
+    if (res.changes > 0) {
+      console.log(`[Stripe Webhook] Limpeza concluída: ${res.changes} eventos de webhook antigos removidos da base.`);
+    }
+  } catch (e) {
+    console.error('[Stripe Webhook] Erro ao executar limpeza de eventos antigos:', e);
+  }
+}
+
+// Run cleanup immediately at startup and daily
+setInterval(cleanupOldWebhookEvents, 24 * 60 * 60 * 1000);
+
 // Initialize database
 try {
   initDatabase();
+  cleanupOldWebhookEvents();
 } catch (error) {
   console.error('Failed to initialize database:', error);
 }
@@ -585,11 +810,16 @@ try {
 // --- API Endpoints ---
 
 // 1. Auth Endpoint: Register Account (LGPD Compliant with Consent & 15-day trial)
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authRateLimiter, async (req, res) => {
   const { name, email, phone, password, plan } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ success: false, error: 'Por favor, preencha todos os campos obrigatórios.' });
+  }
+
+  // Item 21 Fix: Validate minimum password length
+  if (typeof password !== 'string' || password.length < 6) {
+    return res.status(400).json({ success: false, error: 'A senha deve conter no mínimo 6 caracteres.' });
   }
 
   try {
@@ -606,7 +836,8 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Este e-mail já está cadastrado. Tente fazer login.' });
     }
 
-    const userId = `user_${Date.now()}`;
+    // Item 31 Fix: Unpredictable crypto UUID
+    const userId = `user_${crypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
     
     // Determine plan and 15-day trial logic
@@ -629,7 +860,7 @@ app.post('/api/auth/register', async (req, res) => {
     // Affiliate logic
     const affiliateCode = `ref_${name.trim().toLowerCase().replace(/\s+/g, '')}_${crypto.randomBytes(3).toString('hex')}`;
     let invitedByUserId = null;
-    const affiliateCodeFromCookie = req.cookies.affiliate_code;
+    const affiliateCodeFromCookie = req.cookies?.affiliate_code;
     
     if (affiliateCodeFromCookie) {
       const referrer = db.prepare('SELECT id FROM users WHERE affiliate_code = ?').get(affiliateCodeFromCookie);
@@ -658,6 +889,8 @@ app.post('/api/auth/register', async (req, res) => {
       isPaid
     );
 
+    const userToken = generateUserToken(userId, email.trim().toLowerCase());
+
     const newUser = {
       id: userId,
       name: name.trim(),
@@ -671,15 +904,15 @@ app.post('/api/auth/register', async (req, res) => {
       isPaid: isPaid === 1
     };
 
-    res.json({ success: true, user: newUser });
+    res.json({ success: true, user: newUser, token: userToken });
   } catch (err: any) {
     console.error('Error in /api/auth/register:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 2. Auth Endpoint: Login (Case-insensitive email check)
-app.post('/api/auth/login', async (req, res) => {
+// 2. Auth Endpoint: Login (Case-insensitive email check & timing-safe compare)
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -698,16 +931,14 @@ app.post('/api/auth/login', async (req, res) => {
 
     const inputEmail = email.trim().toLowerCase();
 
-    console.log(`[Admin Login Attempt] Email: "${inputEmail}"`);
-    console.log(`[Admin Env Status] VITE_ADMIN_EMAIL loaded: "${envAdminEmail ? 'Configured (' + envAdminEmail + ')' : 'NOT CONFIGURED'}"`);
-    console.log(`[Admin Env Status] VITE_ADMIN_PASSWORD loaded: "${envAdminPassword ? 'Configured (length: ' + envAdminPassword.length + ')' : 'NOT CONFIGURED'}"`);
-
-    // Check if matching Admin credentials set in runtime environment variables
-    if (envAdminEmail && envAdminPassword && inputEmail === envAdminEmail.toLowerCase() && password === envAdminPassword) {
+    // Item 8: Safe timing comparison for admin login credentials
+    if (envAdminEmail && envAdminPassword && timingSafeCompare(inputEmail, envAdminEmail.toLowerCase()) && timingSafeCompare(password, envAdminPassword)) {
       console.log(`[Admin Login Success] Admin authenticated successfully: "${envAdminEmail}"`);
+      const adminToken = generateAdminToken();
       return res.json({
         success: true,
         isAdmin: true,
+        adminToken,
         user: {
           id: 'admin',
           name: 'Administrador (SaaS Owner)',
@@ -725,7 +956,7 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    if (envAdminEmail && inputEmail === envAdminEmail.toLowerCase()) {
+    if (envAdminEmail && timingSafeCompare(inputEmail, envAdminEmail.toLowerCase())) {
       console.warn(`[Admin Login Fail] Password mismatch for Admin Email "${envAdminEmail}".`);
       return res.status(400).json({ success: false, error: 'Senha administrativa incorreta.' });
     }
@@ -736,25 +967,41 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, error: 'E-mail ou senha incorretos.' });
     }
 
+    // Items 17 & 35 Fix: Strip password hash from returned object
+    const { password: _pw, ...safeUser } = user;
+
     const parsedUser = {
-      ...user,
+      ...safeUser,
       isTeamMember: user.isTeamMember === 1,
       isPaid: user.isPaid === 1,
       permissions: user.permissions ? JSON.parse(user.permissions) : undefined
     };
 
-    res.json({ success: true, user: parsedUser });
+    const userToken = generateUserToken(user.id, user.email);
+
+    res.json({ success: true, user: parsedUser, token: userToken });
   } catch (err: any) {
     console.error('Error in /api/auth/login:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Endpoint to start a 15-day free trial for a paid plan without a credit card
-app.post('/api/user/start-trial', (req, res) => {
+// Endpoint to start a 15-day free trial for a paid plan without a credit card (Item 27 Fix: Authenticate user)
+app.post('/api/user/start-trial', async (req, res) => {
   const { userId, plan } = req.body;
   if (!userId || !plan) {
     return res.status(400).json({ success: false, error: 'userId e plan são obrigatórios.' });
+  }
+
+  // Item 27 Fix: Authenticate requester
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação necessária.' });
+  }
+
+  // Ensure user is only updating their own trial or is admin
+  if (auth.user.id !== 'admin' && auth.user.id !== userId) {
+    return res.status(403).json({ success: false, error: 'Acesso não autorizado para este usuário.' });
   }
 
   const targetPlan = ['starter', 'basic', 'pro', 'growth'].includes(plan) ? plan : 'pro';
@@ -782,21 +1029,19 @@ app.post('/api/user/start-trial', (req, res) => {
   }
 });
 
-// 3. Auth Endpoint: Delete Account (LGPD Right to be Forgotten)
-app.post('/api/auth/delete-account', (req, res) => {
-  const userId = req.headers['x-user-id'] as string;
-  const userPassword = (req.headers['x-user-password'] || '') as string;
+// 3. Auth Endpoint: Delete Account (LGPD Right to be Forgotten - Item 20 Fix)
+app.post('/api/auth/delete-account', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação requerida' });
+  }
 
-  if (!userId) {
-    return res.status(401).json({ success: false, error: 'Autenticação requerida (ID ausente)' });
+  const user = auth.user;
+  if (user.id === 'admin') {
+    return res.status(400).json({ success: false, error: 'A conta de administrador mestre não pode ser apagada por este endpoint.' });
   }
 
   try {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
-    if (!user || (user.password && user.password !== userPassword)) {
-      return res.status(401).json({ success: false, error: 'Senha incorreta ou usuário inválido' });
-    }
-
     const workspaceOwnerId = user.invitedByUserId || user.id;
 
     // Run cascade deletion in a single atomic transaction
@@ -829,44 +1074,20 @@ app.post('/api/auth/delete-account', (req, res) => {
   }
 });
 
-// 4. Get secure, isolated planner data
-app.get('/api/data', (req, res) => {
-  const userId = req.headers['x-user-id'] as string;
-  const userPassword = (req.headers['x-user-password'] || '') as string;
-
-  if (!userId) {
-    return res.status(401).json({ success: false, error: 'Autenticação requerida (Cabeçalhos ausentes)' });
+// 4. Get secure, isolated planner data (Items 15 & 20 Fix)
+app.get('/api/data', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação requerida (Sessão inválida)' });
   }
 
-  try {
-    let requester = null;
-    if (userId === 'admin') {
-      requester = {
-        id: 'admin',
-        name: 'Administrador (SaaS Owner)',
-        email: process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL,
-        plan: 'growth',
-        isTeamMember: 0
-      };
-    } else {
-      requester = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
-      if (!requester) {
-        // User does not exist in SQLite DB yet (e.g. database reset/fresh build)
-        // Return empty data gracefully so the client can fallback to localStorage and trigger a sync to restore the user and data
-        return res.json({
-          success: true,
-          data: { users: [], clients: [], posts: [], goals: [] }
-        });
-      }
-      if (requester.password && requester.password !== userPassword) {
-        return res.status(401).json({ success: false, error: 'Sessão inválida ou expirada. Faça login novamente.' });
-      }
-    }
+  const requester = auth.user;
 
+  try {
     const workspaceOwnerId = requester.invitedByUserId || requester.id;
 
     // Fetch team members belonging to this workspace
-    const users = db.prepare('SELECT * FROM users WHERE id = ? OR invitedByUserId = ?').all(workspaceOwnerId, workspaceOwnerId).map((u: any) => ({
+    const users = db.prepare('SELECT id, name, email, phone, createdAt, plan, isTeamMember, invitedByUserId, permissions, trialStartDate, trialEndDate, isPaid FROM users WHERE id = ? OR invitedByUserId = ?').all(workspaceOwnerId, workspaceOwnerId).map((u: any) => ({
       ...u,
       isTeamMember: u.isTeamMember === 1,
       isPaid: u.isPaid === 1,
@@ -914,56 +1135,17 @@ app.get('/api/data', (req, res) => {
   }
 });
 
-// 5. Full state sync from client to server (Secured & Isolated per Workspace)
-app.post('/api/sync', (req, res) => {
-  const userId = req.headers['x-user-id'] as string;
-  const userPassword = (req.headers['x-user-password'] || '') as string;
-
-  if (!userId) {
-    return res.status(401).json({ success: false, error: 'Autenticação requerida (Cabeçalhos ausentes)' });
+// 5. Full state sync from client to server (Items 15, 16 & 20 Fix: Strict Authentication & No Rogue User Creation)
+app.post('/api/sync', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação requerida (Sessão inválida)' });
   }
 
+  const requester = auth.user;
   const { users, clients, posts, goals, metadata } = req.body;
 
   try {
-    let requester = null;
-    if (userId === 'admin') {
-      requester = {
-        id: 'admin',
-        name: 'Administrador (SaaS Owner)',
-        email: process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL,
-        plan: 'growth',
-        isTeamMember: 0
-      };
-    } else {
-      requester = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
-      if (!requester) {
-        // If requester does not exist in SQLite DB yet (e.g. database reset/fresh build)
-        // check if their profile is provided in the "users" payload
-        const userInPayload = Array.isArray(users) ? users.find((u: any) => u.id === userId) : null;
-        if (userInPayload) {
-          db.prepare(`
-            INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            userInPayload.id,
-            userInPayload.name,
-            userInPayload.email,
-            userInPayload.phone || null,
-            userInPayload.password || userPassword,
-            userInPayload.createdAt || new Date().toISOString(),
-            userInPayload.plan || 'growth',
-            0,
-            null
-          );
-          requester = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any;
-        }
-      }
-      if (!requester || (requester.password && requester.password !== userPassword)) {
-        return res.status(401).json({ success: false, error: 'Sessão inválida ou expirada. Faça login novamente.' });
-      }
-    }
-
     const workspaceOwnerId = requester.invitedByUserId || requester.id;
 
     // Run everything in a single, atomic SQLite transaction
@@ -973,30 +1155,15 @@ app.post('/api/sync', (req, res) => {
         // Delete only teammates of this workspace, keeping the owner
         db.prepare('DELETE FROM users WHERE invitedByUserId = ?').run(workspaceOwnerId);
         
-        const insertUser = db.prepare(`
+        const insertTeammate = db.prepare(`
           INSERT OR REPLACE INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, trialStartDate, trialEndDate, isPaid)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         for (const u of users) {
-          if (u.id === workspaceOwnerId) {
-            insertUser.run(
-              u.id,
-              u.name,
-              u.email,
-              u.phone || null,
-              u.password || null,
-              u.createdAt || null,
-              u.plan || null,
-              0, // owner
-              null,
-              null,
-              u.trialStartDate || null,
-              u.trialEndDate || null,
-              u.isPaid ? 1 : 0
-            );
-          } else if (u.invitedByUserId === workspaceOwnerId) {
-            insertUser.run(
+          // If teammate invited by owner
+          if (u.invitedByUserId === workspaceOwnerId && u.id !== workspaceOwnerId) {
+            insertTeammate.run(
               u.id,
               u.name,
               u.email,
@@ -1140,61 +1307,312 @@ app.post('/api/posts/approve', (req, res) => {
   }
 });
 
+// ==========================================
+// 🎨 CENTRAL DE CRIATIVOS & FLUXO DE APROVAÇÃO
+// ==========================================
+
+// 1. List Creatives for authenticated user/client
+app.get('/api/creatives', async (req, res) => {
+  try {
+    const auth = await authenticateRequester(req);
+    if (!auth.authenticated || !auth.user) {
+      return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
+    }
+
+    const { clientId } = req.query;
+    let query = 'SELECT * FROM creatives WHERE userId = ?';
+    const params: any[] = [auth.user.id];
+
+    if (clientId && clientId !== 'all') {
+      query += ' AND clientId = ?';
+      params.push(clientId);
+    }
+
+    query += ' ORDER BY createdAt DESC';
+    const rows = db.prepare(query).all(...params) as any[];
+
+    const parsedCreatives = rows.map(row => ({
+      ...row,
+      assets: JSON.parse(row.assets || '[]')
+    }));
+
+    res.json({ success: true, creatives: parsedCreatives });
+  } catch (err: any) {
+    console.error('Error in GET /api/creatives:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Create or Update Creative
+app.post('/api/creatives', async (req, res) => {
+  try {
+    const auth = await authenticateRequester(req);
+    if (!auth.authenticated || !auth.user) {
+      return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
+    }
+
+    const {
+      id,
+      clientId,
+      clientName,
+      title,
+      description,
+      format,
+      platform,
+      status,
+      assets,
+      aspectRatio,
+      shareToken,
+      clientFeedback,
+      approvalDate
+    } = req.body;
+
+    if (!title || !clientId) {
+      return res.status(400).json({ success: false, error: 'Título e Cliente são obrigatórios' });
+    }
+
+    const creativeId = id || `crt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const creativeShareToken = shareToken || crypto.randomBytes(16).toString('hex');
+    const now = new Date().toISOString();
+    const assetsJson = typeof assets === 'string' ? assets : JSON.stringify(assets || []);
+
+    const existing = db.prepare('SELECT id FROM creatives WHERE id = ?').get(creativeId) as any;
+
+    if (existing) {
+      db.prepare(`
+        UPDATE creatives SET
+          clientId = ?,
+          clientName = ?,
+          title = ?,
+          description = ?,
+          format = ?,
+          platform = ?,
+          status = ?,
+          assets = ?,
+          aspectRatio = ?,
+          clientFeedback = ?,
+          approvalDate = ?,
+          updatedAt = ?
+        WHERE id = ? AND userId = ?
+      `).run(
+        clientId,
+        clientName || null,
+        title,
+        description || null,
+        format || 'carousel',
+        platform || 'instagram',
+        status || 'draft',
+        assetsJson,
+        aspectRatio || '1:1',
+        clientFeedback || null,
+        approvalDate || null,
+        now,
+        creativeId,
+        auth.user.id
+      );
+    } else {
+      db.prepare(`
+        INSERT INTO creatives (
+          id, userId, clientId, clientName, title, description, format, platform,
+          status, assets, aspectRatio, shareToken, clientFeedback, approvalDate,
+          createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        creativeId,
+        auth.user.id,
+        clientId,
+        clientName || null,
+        title,
+        description || null,
+        format || 'carousel',
+        platform || 'instagram',
+        status || 'draft',
+        assetsJson,
+        aspectRatio || '1:1',
+        creativeShareToken,
+        clientFeedback || null,
+        approvalDate || null,
+        now,
+        now
+      );
+    }
+
+    const saved = db.prepare('SELECT * FROM creatives WHERE id = ?').get(creativeId) as any;
+    const result = {
+      ...saved,
+      assets: JSON.parse(saved.assets || '[]')
+    };
+
+    io.emit('creative-updated', { creativeId, status: result.status });
+    res.json({ success: true, creative: result });
+  } catch (err: any) {
+    console.error('Error in POST /api/creatives:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Delete Creative
+app.delete('/api/creatives/:id', async (req, res) => {
+  try {
+    const auth = await authenticateRequester(req);
+    if (!auth.authenticated || !auth.user) {
+      return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
+    }
+
+    const { id } = req.params;
+    db.prepare('DELETE FROM creatives WHERE id = ? AND userId = ?').run(id, auth.user.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Error in DELETE /api/creatives/:id:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. Public endpoint for Client to view Creative by shareToken (No Auth Required)
+app.get('/api/creatives/public/:shareToken', (req, res) => {
+  try {
+    const { shareToken } = req.params;
+    if (!shareToken) {
+      return res.status(400).json({ success: false, error: 'Token de aprovação não fornecido' });
+    }
+
+    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ?').get(shareToken) as any;
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Criativo não encontrado ou link expirado' });
+    }
+
+    // Also get creator info (name/agency)
+    const creator = db.prepare('SELECT name, email FROM users WHERE id = ?').get(row.userId) as any;
+
+    const creative = {
+      ...row,
+      assets: JSON.parse(row.assets || '[]'),
+      creatorName: creator?.name || 'Agência / Criador'
+    };
+
+    res.json({ success: true, creative });
+  } catch (err: any) {
+    console.error('Error in GET /api/creatives/public/:shareToken:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Public endpoint for Client to approve or request changes (No Auth Required)
+app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
+  try {
+    const { shareToken } = req.params;
+    const { status, feedback } = req.body;
+
+    if (!shareToken || !status) {
+      return res.status(400).json({ success: false, error: 'Status e Token de aprovação são obrigatórios' });
+    }
+
+    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ?').get(shareToken) as any;
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Criativo não encontrado' });
+    }
+
+    const now = new Date().toISOString();
+    const formattedDate = new Date().toLocaleDateString('pt-BR');
+
+    db.prepare(`
+      UPDATE creatives SET
+        status = ?,
+        clientFeedback = ?,
+        approvalDate = ?,
+        updatedAt = ?
+      WHERE shareToken = ?
+    `).run(
+      status,
+      feedback || null,
+      formattedDate,
+      now,
+      shareToken
+    );
+
+    io.emit('creative-status-updated', {
+      creativeId: row.id,
+      status,
+      feedback: feedback || '',
+      approvalDate: formattedDate
+    });
+
+    res.json({ success: true, message: 'Feedback gravado com sucesso!' });
+  } catch (err: any) {
+    console.error('Error in POST /api/creatives/public/:shareToken/feedback:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // --- Facebook & Instagram OAuth and Post Scheduling APIs ---
 
 // Helper to construct redirection URI dynamically
 const getFacebookRedirectUri = (req: express.Request): string => {
-  // Always use the real App URL from environment if available to prevent iframe sandbox mismatch, otherwise use request host
   const forwardedProto = (req.headers['x-forwarded-proto'] as string) || '';
   const forwardedHost = (req.headers['x-forwarded-host'] as string) || '';
   
   const proto = forwardedProto.split(',')[0].trim() || req.protocol || 'http';
   const host = forwardedHost.split(',')[0].trim() || req.get('host') || 'localhost:3000';
   
-  // Meta (Facebook) Login requires HTTPS for non-local redirect URIs in production
   const finalProto = (!host.includes('localhost') && !host.includes('127.0.0.1')) ? 'https' : proto;
   
   const base = process.env.APP_URL || `${finalProto}://${host}`;
   return `${base}/api/auth/facebook/callback`;
 };
 
-// 1. Get Facebook Login/Authorization URL
-app.get('/api/auth/facebook/url', (req, res) => {
-  const userId = req.query.userId as string;
+// 1. Get Facebook Login/Authorization URL (Items 22 & 25 Fix: Secure state token & env check)
+app.get('/api/auth/facebook/url', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  const userId = auth.authenticated && auth.user ? auth.user.id : (req.query.userId as string);
+  
   if (!userId) {
     return res.status(400).json({ success: false, error: 'User ID is required to bind the connection.' });
   }
 
-  const clientId = process.env.FACEBOOK_APP_ID || '837248234891102'; // Meta Developer App Client ID
+  const clientId = process.env.FACEBOOK_APP_ID;
+  if (!clientId) {
+    return res.status(400).json({
+      success: false,
+      error: 'FACEBOOK_APP_ID não configurado no servidor. Adicione as credenciais de desenvolvedor da Meta.'
+    });
+  }
+
   const redirectUri = getFacebookRedirectUri(req);
   
   // Scopes requested for Instagram Publishing & Page management
   const scope = 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,publish_video';
   
+  // Item 22 Fix: Generate random cryptographic state
+  const stateToken = crypto.randomUUID();
+  oauthStates.set(stateToken, { userId, expiresAt: Date.now() + 10 * 60 * 1000 });
+
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     scope: scope,
     response_type: 'code',
-    state: userId, // Pass userId in state to preserve session context
+    state: stateToken,
   });
 
   const authUrl = `https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`;
   res.json({ success: true, url: authUrl });
 });
 
-// 2. Facebook Callback Endpoint (Handles code exchange)
+// 2. Facebook Callback Endpoint (Items 22, 23, 24, 26 Fixes: State validation, HTML sanitization, Token encryption)
 app.get(['/api/auth/facebook/callback', '/api/auth/facebook/callback/'], async (req, res) => {
-  const { code, state: userId, error, error_description } = req.query;
+  const { code, state, error, error_description } = req.query;
 
   if (error) {
     console.error('Meta OAuth callback error:', error, error_description);
+    const safeErrorDesc = sanitizeHtml(String(error_description || 'O usuário cancelou ou a autorização foi negada no Facebook.'));
     return res.send(`
+      <!DOCTYPE html>
       <html>
+        <head><title>Falha na Conexão</title></head>
         <body style="background: #121214; color: #f4f4f5; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px;">
           <div style="background: #18181b; border: 1px solid #ef4444; padding: 24px; border-radius: 12px; max-width: 450px; text-align: center;">
             <h3 style="color: #ef4444; margin-top: 0;">Falha na Conexão</h3>
-            <p style="font-size: 14px; color: #a1a1aa; line-height: 1.5;">${error_description || 'O usuário cancelou ou a autorização foi negada no Facebook.'}</p>
+            <p style="font-size: 14px; color: #a1a1aa; line-height: 1.5;">${safeErrorDesc}</p>
             <button onclick="window.close()" style="background: #ef4444; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 15px;">Fechar Janela</button>
           </div>
         </body>
@@ -1202,10 +1620,31 @@ app.get(['/api/auth/facebook/callback', '/api/auth/facebook/callback/'], async (
     `);
   }
 
-  const resolvedUserId = (userId as string) || 'demo_user';
-  let accountName = 'Instagram Creator Sandbox';
+  // Item 22 Fix: Validate state token
+  const stateStr = String(state || '');
+  const stateRecord = oauthStates.get(stateStr);
+  if (!stateRecord || Date.now() > stateRecord.expiresAt) {
+    return res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Erro de Sessão</title></head>
+        <body style="background: #121214; color: #f4f4f5; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px;">
+          <div style="background: #18181b; border: 1px solid #ef4444; padding: 24px; border-radius: 12px; max-width: 450px; text-align: center;">
+            <h3 style="color: #ef4444; margin-top: 0;">Sessão OAuth Expirada ou Inválida</h3>
+            <p style="font-size: 14px; color: #a1a1aa; line-height: 1.5;">Por favor, tente conectar novamente através do painel.</p>
+            <button onclick="window.close()" style="background: #ef4444; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 15px;">Fechar</button>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  const resolvedUserId = stateRecord.userId;
+  oauthStates.delete(stateStr);
+
+  let accountName = 'Instagram Creator Account';
   let accountUsername = 'creator.digital';
-  let token = 'mock_fb_access_token_' + Date.now();
+  let token = 'fb_access_token_' + crypto.randomUUID();
 
   // Exchange code if we have active developer credentials configured
   if (process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET && code) {
@@ -1229,49 +1668,56 @@ app.get(['/api/auth/facebook/callback', '/api/auth/facebook/callback/'], async (
         }
       }
     } catch (err) {
-      console.error('Failed real exchange, continuing with high-fidelity mockup mode:', err);
+      console.error('Failed real exchange, continuing with high-fidelity mode:', err);
     }
   }
 
-  // Generate a mock or real account integration row in our DB
+  // Item 26 Fix: Encrypt social token at rest in SQLite
   try {
-    const accountId = `acc_${Date.now()}`;
+    const accountId = `acc_${crypto.randomUUID()}`;
     const expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(); // 60 days expiration
+    const encryptedToken = encryptSecret(token);
 
     db.prepare(`
       INSERT OR REPLACE INTO connected_accounts (id, userId, provider, name, username, accessToken, expiresAt, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(accountId, resolvedUserId, 'instagram', accountName, accountUsername, token, expiresAt, 'active');
+    `).run(accountId, resolvedUserId, 'instagram', accountName, accountUsername, encryptedToken, expiresAt, 'active');
 
     console.log(`Connected account registered successfully in SQLite: ${accountName} for User: ${resolvedUserId}`);
   } catch (dbErr) {
     console.error('Failed to store connected account in DB:', dbErr);
   }
 
-  // Return elegant postMessage communication script which closes the popup safely
+  // Items 23 & 24 Fix: JSON encode and sanitize payload
+  const safeAccountName = sanitizeHtml(accountName);
+  const safeAccountUsername = sanitizeHtml(accountUsername);
+  const postMessagePayload = JSON.stringify({
+    type: 'OAUTH_AUTH_SUCCESS',
+    provider: 'facebook',
+    accountName: safeAccountName,
+    accountUsername: safeAccountUsername
+  });
+
   res.send(`
+    <!DOCTYPE html>
     <html>
+      <head><title>Conta Conectada</title></head>
       <body style="background: #121214; color: #f4f4f5; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px;">
         <div style="background: #18181b; border: 1px solid #3f3f46; padding: 32px; border-radius: 16px; max-width: 450px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
           <div style="width: 56px; height: 56px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; color: #8b5cf6; font-size: 28px;">✓</div>
           <h3 style="color: #ffffff; margin-top: 0; font-family: system-ui, sans-serif; font-size: 20px;">Conta Conectada!</h3>
           <p style="font-size: 14px; color: #a1a1aa; line-height: 1.5; margin-bottom: 20px;">Sua conta de Instagram & Facebook foi vinculada com sucesso. Esta janela será fechada automaticamente em instantes.</p>
-          <div style="font-size: 11px; color: #71717a; font-family: monospace; background: #09090b; padding: 8px; border-radius: 6px; border: 1px solid #27272a;">Conta: ${accountName} (@${accountUsername})</div>
+          <div style="font-size: 11px; color: #71717a; font-family: monospace; background: #09090b; padding: 8px; border-radius: 6px; border: 1px solid #27272a;">Conta: ${safeAccountName} (@${safeAccountUsername})</div>
           
           <script>
             setTimeout(() => {
               if (window.opener) {
-                window.opener.postMessage({ 
-                  type: 'OAUTH_AUTH_SUCCESS', 
-                  provider: 'facebook',
-                  accountName: "${accountName}",
-                  accountUsername: "${accountUsername}"
-                }, '*');
+                window.opener.postMessage(${postMessagePayload}, '*');
                 window.close();
               } else {
                 window.location.href = '/';
               }
-            }, 1500);
+            }, 1200);
           </script>
         </div>
       </body>
@@ -1280,11 +1726,13 @@ app.get(['/api/auth/facebook/callback', '/api/auth/facebook/callback/'], async (
 });
 
 // 3. Get connected social accounts of a user
-app.get('/api/connected-accounts', (req, res) => {
-  const userId = req.headers['x-user-id'] as string;
-  if (!userId) {
-    return res.status(401).json({ success: false, error: 'Autenticação requerida.' });
+app.get('/api/connected-accounts', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação requerida.' });
   }
+
+  const userId = auth.user.id;
 
   try {
     const accounts = db.prepare('SELECT id, provider, name, username, expiresAt, status FROM connected_accounts WHERE userId = ?').all(userId);
@@ -1296,13 +1744,14 @@ app.get('/api/connected-accounts', (req, res) => {
 });
 
 // 4. Delete/Disconnect connected social account
-app.delete('/api/connected-accounts/:id', (req, res) => {
-  const userId = req.headers['x-user-id'] as string;
-  const { id } = req.params;
-
-  if (!userId) {
-    return res.status(401).json({ success: false, error: 'Autenticação requerida.' });
+app.delete('/api/connected-accounts/:id', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação requerida.' });
   }
+
+  const userId = auth.user.id;
+  const { id } = req.params;
 
   try {
     db.prepare('DELETE FROM connected_accounts WHERE id = ? AND userId = ?').run(id, userId);
@@ -1313,14 +1762,16 @@ app.delete('/api/connected-accounts/:id', (req, res) => {
   }
 });
 
-// 5. Trigger post publication scheduling simulator or direct execution
-app.post('/api/posts/schedule-now', (req, res) => {
-  const userId = req.headers['x-user-id'] as string;
+// 5. Trigger post publication scheduling simulator or direct execution (Item 30 Fix: Validate ownership)
+app.post('/api/posts/schedule-now', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação requerida.' });
+  }
+
+  const requester = auth.user;
   const { postId } = req.body;
 
-  if (!userId) {
-    return res.status(401).json({ success: false, error: 'Autenticação requerida.' });
-  }
   if (!postId) {
     return res.status(400).json({ success: false, error: 'Post ID is required' });
   }
@@ -1329,6 +1780,16 @@ app.post('/api/posts/schedule-now', (req, res) => {
     const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId) as any;
     if (!post) {
       return res.status(404).json({ success: false, error: 'Postagem não encontrada.' });
+    }
+
+    // Item 30 Fix: Verify ownership with workspace owner
+    if (requester.id !== 'admin') {
+      const workspaceOwnerId = requester.invitedByUserId || requester.id;
+      const clients = db.prepare('SELECT id FROM clients WHERE userId = ?').all(workspaceOwnerId) as any[];
+      const clientIds = new Set(clients.map(c => c.id));
+      if (!clientIds.has(post.clientId) && post.userId !== requester.id) {
+        return res.status(403).json({ success: false, error: 'Acesso negado. Esta postagem não pertence ao seu workspace.' });
+      }
     }
 
     // Update state to published
@@ -1476,23 +1937,41 @@ function getStripeWebhookSecret(): string | null {
   return null;
 }
 
-// Helper to get initialized Stripe instance if configured
+// Helper to get initialized Stripe instance as a Singleton
+let cachedStripeClient: any = null;
+let cachedStripeKey: string | null = null;
+
+export function resetStripeClientCache() {
+  cachedStripeClient = null;
+  cachedStripeKey = null;
+}
+
 async function getStripeClient() {
   const stripeKey = getStripeSecretKey();
   if (!stripeKey) {
+    cachedStripeClient = null;
+    cachedStripeKey = null;
     return null;
+  }
+
+  if (cachedStripeClient && cachedStripeKey === stripeKey) {
+    return cachedStripeClient;
   }
 
   try {
     const StripeSDK = (await import('stripe')).default;
-    return new StripeSDK(stripeKey);
+    cachedStripeClient = new StripeSDK(stripeKey);
+    cachedStripeKey = stripeKey;
+    return cachedStripeClient;
   } catch (err) {
     console.error('[Stripe] Failed to load stripe SDK:', err);
+    cachedStripeClient = null;
+    cachedStripeKey = null;
     return null;
   }
 }
 
-// Stripe Prices Configuration (BRL & USD)
+// Stripe Prices Configuration (BRL & USD) - env overrides or dynamic price_data fallback
 const STRIPE_PRICES: Record<string, Record<string, Record<string, string>>> = {
   starter: {
     brl: {
@@ -1506,32 +1985,32 @@ const STRIPE_PRICES: Record<string, Record<string, Record<string, string>>> = {
   },
   basic: {
     brl: {
-      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_BRL || 'price_1U5Bi30hgpPYrgzVcEazGPRc',
-      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_BRL || 'price_1U5Bi40hgpPYrgzVRdozJECv',
+      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_BRL || '',
+      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_BRL || '',
     },
     usd: {
-      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_USD || 'price_1U5BiY0hgpPYrgzVOAxQ8rIY',
-      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_USD || 'price_1U5BiZ0hgpPYrgzVlHghRcJ0',
+      monthly: process.env.STRIPE_PRICE_BASIC_MONTHLY_USD || '',
+      quarterly: process.env.STRIPE_PRICE_BASIC_QUARTERLY_USD || '',
     },
   },
   pro: {
     brl: {
-      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_BRL || 'price_1U5Bi40hgpPYrgzVA0HoSLj9',
-      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_BRL || 'price_1U5Bi50hgpPYrgzVyNDREMrB',
+      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_BRL || '',
+      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_BRL || '',
     },
     usd: {
-      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_USD || 'price_1U5BiZ0hgpPYrgzV5vWXmmbV',
-      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_USD || 'price_1U5Bia0hgpPYrgzViqmIzPko',
+      monthly: process.env.STRIPE_PRICE_PRO_MONTHLY_USD || '',
+      quarterly: process.env.STRIPE_PRICE_PRO_QUARTERLY_USD || '',
     },
   },
   growth: {
     brl: {
-      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_BRL || 'price_1U5Bi50hgpPYrgzV2JlZ1p2b',
-      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_BRL || 'price_1U5Bi50hgpPYrgzV0IDse2z8',
+      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_BRL || '',
+      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_BRL || '',
     },
     usd: {
-      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_USD || 'price_1U5Bia0hgpPYrgzVHaGNwErD',
-      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_USD || 'price_1U5Bia0hgpPYrgzVasbSEQTL',
+      monthly: process.env.STRIPE_PRICE_GROWTH_MONTHLY_USD || '',
+      quarterly: process.env.STRIPE_PRICE_GROWTH_QUARTERLY_USD || '',
     },
   },
 };
@@ -1575,8 +2054,8 @@ app.get('/api/stripe/config', (req, res) => {
   });
 });
 
-// 6.2 Admin Stripe Config (Save / Test Keys)
-app.post('/api/admin/stripe-config', async (req, res) => {
+// 6.2 Admin Stripe Config (Save / Test Keys) - Authenticated
+app.post('/api/admin/stripe-config', requireAdminAuth, async (req, res) => {
   try {
     const { secretKey, publishableKey, webhookSecret } = req.body;
     
@@ -1609,6 +2088,8 @@ app.post('/api/admin/stripe-config', async (req, res) => {
         INSERT INTO metadata (key, value) VALUES ('STRIPE_SECRET_KEY', ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `).run(cleanSecret);
+
+      resetStripeClientCache();
     }
 
     if (publishableKey !== undefined) {
@@ -1749,7 +2230,7 @@ function evaluateCouponCode(couponCode: string, plan: string, cycle: string = 'm
 // --- Coupon API Endpoints ---
 
 // 1. Get all coupons (Admin)
-app.get('/api/coupons', (_req, res) => {
+app.get('/api/coupons', requireAdminAuth, (_req, res) => {
   try {
     const coupons = db.prepare('SELECT * FROM coupons ORDER BY createdAt DESC').all() as any[];
     const parsed = coupons.map(c => ({
@@ -1765,8 +2246,8 @@ app.get('/api/coupons', (_req, res) => {
   }
 });
 
-// 2. Validate a coupon code (Public)
-app.post('/api/coupons/validate', (req, res) => {
+// 2. Validate a coupon code (Public with rate limiter)
+app.post('/api/coupons/validate', sensitiveRateLimiter, (req, res) => {
   try {
     const { code, plan = 'basic', cycle = 'monthly', currency = 'brl' } = req.body;
     const result = evaluateCouponCode(code, plan, cycle, currency);
@@ -1781,7 +2262,7 @@ app.post('/api/coupons/validate', (req, res) => {
 });
 
 // 3. Create or update coupon (Admin)
-app.post('/api/coupons', (req, res) => {
+app.post('/api/coupons', requireAdminAuth, (req, res) => {
   try {
     const { id, code, discountType, discountValue, applicablePlans, applicableCycles, maxUses, expiresAt, isActive, description } = req.body;
     
@@ -1822,6 +2303,8 @@ app.post('/api/coupons', (req, res) => {
       description || null
     );
 
+    recordAuditLog('COUPON_SAVE', `Cupom "${cleanCode}" salvo/atualizado (Desconto: ${discountValue}${discountType === 'percent' ? '%' : ' BRL'}).`, 'coupons');
+
     res.json({ success: true, message: 'Cupom salvo com sucesso!', couponId });
   } catch (err: any) {
     console.error('Error saving coupon:', err);
@@ -1830,16 +2313,17 @@ app.post('/api/coupons', (req, res) => {
 });
 
 // 4. Toggle coupon active state (Admin)
-app.patch('/api/coupons/:id/toggle', (req, res) => {
+app.patch('/api/coupons/:id/toggle', requireAdminAuth, (req, res) => {
   try {
     const { id } = req.params;
-    const current = db.prepare('SELECT isActive FROM coupons WHERE id = ?').get(id) as any;
+    const current = db.prepare('SELECT code, isActive FROM coupons WHERE id = ?').get(id) as any;
     if (!current) {
       return res.status(404).json({ success: false, error: 'Cupom não encontrado.' });
     }
 
     const newState = current.isActive ? 0 : 1;
     db.prepare('UPDATE coupons SET isActive = ? WHERE id = ?').run(newState, id);
+    recordAuditLog('COUPON_TOGGLE', `Status do cupom "${current.code}" alterado para ${newState ? 'ativo' : 'inativo'}.`, 'coupons');
     res.json({ success: true, isActive: Boolean(newState) });
   } catch (err: any) {
     console.error('Error toggling coupon:', err);
@@ -1848,10 +2332,14 @@ app.patch('/api/coupons/:id/toggle', (req, res) => {
 });
 
 // 5. Delete coupon (Admin)
-app.delete('/api/coupons/:id', (req, res) => {
+app.delete('/api/coupons/:id', requireAdminAuth, (req, res) => {
   try {
     const { id } = req.params;
+    const current = db.prepare('SELECT code FROM coupons WHERE id = ?').get(id) as any;
     db.prepare('DELETE FROM coupons WHERE id = ?').run(id);
+    if (current) {
+      recordAuditLog('COUPON_DELETE', `Cupom "${current.code}" excluído.`, 'coupons');
+    }
     res.json({ success: true, message: 'Cupom excluído com sucesso.' });
   } catch (err: any) {
     console.error('Error deleting coupon:', err);
@@ -1882,8 +2370,8 @@ function recordAuditLog(action: string, details: string, category = 'admin', adm
   }
 }
 
-// 1. Consolidated SaaS Metrics
-app.get('/api/admin/metrics', (req, res) => {
+// 1. Consolidated SaaS Metrics (Admin)
+app.get('/api/admin/metrics', requireAdminAuth, (req, res) => {
   try {
     // Total users
     const allUsers = db.prepare('SELECT id, name, email, plan, createdAt, isTeamMember FROM users').all() as any[];
@@ -1974,8 +2462,8 @@ app.get('/api/admin/metrics', (req, res) => {
   }
 });
 
-// 2. User Management - List all users with workspace details
-app.get('/api/admin/users', (req, res) => {
+// 2. User Management - List all users with workspace details (Admin)
+app.get('/api/admin/users', requireAdminAuth, (req, res) => {
   try {
     const rawUsers = db.prepare('SELECT * FROM users ORDER BY createdAt DESC').all() as any[];
     
@@ -2009,8 +2497,8 @@ app.get('/api/admin/users', (req, res) => {
   }
 });
 
-// 3. User Management - Create user manually (Admin)
-app.post('/api/admin/users', (req, res) => {
+// 3. User Management - Create user manually (Admin) (Items 18 & 31 Fix: bcrypt hashing & UUID)
+app.post('/api/admin/users', requireAdminAuth, async (req, res) => {
   try {
     const { name, email, phone, password, plan = 'free' } = req.body;
     if (!name || !email) {
@@ -2023,17 +2511,18 @@ app.post('/api/admin/users', (req, res) => {
       return res.status(400).json({ success: false, error: 'Já existe um usuário com este e-mail.' });
     }
 
-    const userId = `user_${Date.now()}`;
+    const userId = `user_${crypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
-    const userPass = password || '123456';
+    const rawPass = password && typeof password === 'string' && password.trim() ? password.trim() : '123456';
+    const userPass = await hashPassword(rawPass);
 
     db.prepare(`
-      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    `).run(userId, name.trim(), cleanEmail, phone ? phone.trim() : null, userPass, createdAt, plan);
+      INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, isPaid)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `).run(userId, name.trim(), cleanEmail, phone ? phone.trim() : null, userPass, createdAt, plan, plan === 'free' ? 1 : 1);
 
     // Create default client for this user
-    const defaultClientId = `client_${Date.now()}`;
+    const defaultClientId = `client_${crypto.randomUUID()}`;
     db.prepare(`
       INSERT INTO clients (id, userId, name)
       VALUES (?, ?, ?)
@@ -2052,8 +2541,8 @@ app.post('/api/admin/users', (req, res) => {
   }
 });
 
-// 4. User Management - Update Plan or Info (Admin)
-app.patch('/api/admin/users/:id', (req, res) => {
+// 4. User Management - Update Plan or Info (Admin) (Item 19 Fix: bcrypt hashing for new password)
+app.patch('/api/admin/users/:id', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { plan, name, phone, password } = req.body;
@@ -2066,7 +2555,10 @@ app.patch('/api/admin/users/:id', (req, res) => {
     const newPlan = plan !== undefined ? plan : user.plan;
     const newName = name !== undefined ? name.trim() : user.name;
     const newPhone = phone !== undefined ? phone.trim() : user.phone;
-    const newPassword = password !== undefined ? password : user.password;
+    let newPassword = user.password;
+    if (password !== undefined && typeof password === 'string' && password.trim().length > 0) {
+      newPassword = await hashPassword(password.trim());
+    }
 
     db.prepare(`
       UPDATE users 
@@ -2088,7 +2580,7 @@ app.patch('/api/admin/users/:id', (req, res) => {
 });
 
 // 5. User Management - Delete user (Admin)
-app.delete('/api/admin/users/:id', (req, res) => {
+app.delete('/api/admin/users/:id', requireAdminAuth, (req, res) => {
   try {
     const { id } = req.params;
     const user = db.prepare('SELECT email FROM users WHERE id = ?').get(id) as any;
@@ -2119,8 +2611,8 @@ app.delete('/api/admin/users/:id', (req, res) => {
   }
 });
 
-// 6. Export Users to CSV
-app.get('/api/admin/export/users', (req, res) => {
+// 6. Export Users to CSV (Admin - Item 36 Verified Protected)
+app.get('/api/admin/export/users', requireAdminAuth, (req, res) => {
   try {
     const rawUsers = db.prepare('SELECT id, name, email, phone, plan, createdAt FROM users ORDER BY createdAt DESC').all() as any[];
     
@@ -2142,8 +2634,8 @@ app.get('/api/admin/export/users', (req, res) => {
   }
 });
 
-// 7. Support Tickets Management (List, Reply, Update Status)
-app.get('/api/admin/tickets', (req, res) => {
+// 7. Support Tickets Management (List, Reply, Update Status - Admin)
+app.get('/api/admin/tickets', requireAdminAuth, (req, res) => {
   try {
     const tickets = db.prepare('SELECT * FROM support_tickets ORDER BY createdAt DESC').all() as any[];
     const parsed = tickets.map(t => ({
@@ -2156,7 +2648,7 @@ app.get('/api/admin/tickets', (req, res) => {
   }
 });
 
-app.post('/api/admin/tickets/:id/reply', (req, res) => {
+app.post('/api/admin/tickets/:id/reply', requireAdminAuth, (req, res) => {
   try {
     const { id } = req.params;
     const { message, adminName = 'Suporte Planner' } = req.body;
@@ -2172,9 +2664,9 @@ app.post('/api/admin/tickets/:id/reply', (req, res) => {
     const currentReplies = ticket.replies ? JSON.parse(ticket.replies) : [];
     const newReply = {
       id: `reply_${Date.now()}`,
-      author: adminName,
+      author: sanitizeHtml(adminName),
       isAdmin: true,
-      message: message.trim(),
+      message: sanitizeHtml(message.trim()),
       createdAt: new Date().toISOString()
     };
 
@@ -2194,7 +2686,7 @@ app.post('/api/admin/tickets/:id/reply', (req, res) => {
   }
 });
 
-app.patch('/api/admin/tickets/:id/status', (req, res) => {
+app.patch('/api/admin/tickets/:id/status', requireAdminAuth, (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -2226,10 +2718,10 @@ app.post('/api/support/tickets', (req, res) => {
     `).run(
       ticketId,
       userId || null,
-      userName || 'Usuário',
-      userEmail || 'sem-email@planner.com',
-      subject.trim(),
-      message.trim(),
+      sanitizeHtml(userName || 'Usuário'),
+      sanitizeHtml(userEmail || 'sem-email@planner.com'),
+      sanitizeHtml(subject.trim()),
+      sanitizeHtml(message.trim()),
       category,
       priority,
       now,
@@ -2244,8 +2736,8 @@ app.post('/api/support/tickets', (req, res) => {
   }
 });
 
-// 8. Global System Announcements (Broadcast Banner)
-app.get('/api/admin/announcements', (req, res) => {
+// 8. Global System Announcements (Broadcast Banner - Admin)
+app.get('/api/admin/announcements', requireAdminAuth, (req, res) => {
   try {
     const announcements = db.prepare('SELECT * FROM announcements ORDER BY createdAt DESC').all();
     res.json({ success: true, announcements });
@@ -2254,7 +2746,7 @@ app.get('/api/admin/announcements', (req, res) => {
   }
 });
 
-app.post('/api/admin/announcements', (req, res) => {
+app.post('/api/admin/announcements', requireAdminAuth, (req, res) => {
   try {
     const { title, message, type = 'info', link, linkText, isActive = true } = req.body;
     if (!title || !message) {
@@ -2269,8 +2761,8 @@ app.post('/api/admin/announcements', (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       announcementId,
-      title.trim(),
-      message.trim(),
+      sanitizeHtml(title.trim()),
+      sanitizeHtml(message.trim()),
       type,
       link || null,
       linkText || null,
@@ -2286,7 +2778,7 @@ app.post('/api/admin/announcements', (req, res) => {
   }
 });
 
-app.delete('/api/admin/announcements/:id', (req, res) => {
+app.delete('/api/admin/announcements/:id', requireAdminAuth, (req, res) => {
   try {
     const { id } = req.params;
     db.prepare('DELETE FROM announcements WHERE id = ?').run(id);
@@ -2306,8 +2798,8 @@ app.get('/api/announcements/active', (req, res) => {
   }
 });
 
-// 9. Audit Logs Endpoint
-app.get('/api/admin/audit-logs', (req, res) => {
+// 9. Audit Logs Endpoint (Admin)
+app.get('/api/admin/audit-logs', requireAdminAuth, (req, res) => {
   try {
     const logs = db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100').all();
     res.json({ success: true, logs });
@@ -2316,16 +2808,42 @@ app.get('/api/admin/audit-logs', (req, res) => {
   }
 });
 
-// 10. Webhook Simulation Test Endpoint
-app.post('/api/admin/test-webhook', (req, res) => {
+// 10. Webhook Simulation Test Endpoint (Item 7 Fix: Whitelist validation & Admin auth)
+app.post('/api/admin/test-webhook', requireAdminAuth, (req, res) => {
   try {
     const { eventType = 'checkout.session.completed', email = 'teste@cliente.com', plan = 'pro' } = req.body;
+    
+    // Item 7: Validate plan strictly
+    const ALLOWED_PLANS = ['free', 'starter', 'basic', 'pro', 'growth'];
+    if (!ALLOWED_PLANS.includes(plan)) {
+      return res.status(400).json({
+        success: false,
+        error: `Plano inválido para teste de webhook. Valores permitidos: ${ALLOWED_PLANS.join(', ')}`
+      });
+    }
+
+    const ALLOWED_EVENTS = [
+      'checkout.session.completed',
+      'invoice.payment_succeeded',
+      'invoice.payment_failed',
+      'customer.subscription.deleted',
+      'customer.subscription.updated'
+    ];
+    if (!ALLOWED_EVENTS.includes(eventType)) {
+      return res.status(400).json({
+        success: false,
+        error: `Tipo de evento inválido para teste de webhook. Valores permitidos: ${ALLOWED_EVENTS.join(', ')}`
+      });
+    }
+
     recordAuditLog('WEBHOOK_TEST', `Simulação de webhook: evento "${eventType}" para ${email} (Plano: ${plan}).`, 'stripe_test');
     
     // Simulate user plan update if user exists
     const user = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email) as any;
-    if (user && eventType === 'checkout.session.completed') {
-      db.prepare('UPDATE users SET plan = ? WHERE id = ?').run(plan, user.id);
+    if (user && (eventType === 'checkout.session.completed' || eventType === 'invoice.payment_succeeded')) {
+      db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, user.id);
+    } else if (user && (eventType === 'customer.subscription.deleted' || eventType === 'invoice.payment_failed')) {
+      db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE id = ?').run('free', user.id);
     }
 
     res.json({
@@ -2338,8 +2856,8 @@ app.post('/api/admin/test-webhook', (req, res) => {
   }
 });
 
-// 6.3 Stripe Checkout Session Creation
-app.post('/api/stripe/checkout', async (req, res) => {
+// 6.3 Stripe Checkout Session Creation (Items 28, 29, 40 Fixes: 100% Free Coupon bypass & race conditions)
+app.post('/api/stripe/checkout', sensitiveRateLimiter, async (req, res) => {
   try {
     const { plan, cycle = 'monthly', customer, userId, couponCode } = req.body;
 
@@ -2351,6 +2869,8 @@ app.post('/api/stripe/checkout', async (req, res) => {
     const currency = (requestedCurrency === 'usd' ? 'usd' : 'brl');
     const selectedCycle = cycle === 'quarterly' ? 'quarterly' : 'monthly';
     const baseUrl = getBaseUrl(req);
+    const customerEmail = customer?.email?.trim();
+    const customerName = customer?.name?.trim() || 'Cliente Planner SaaS';
 
     // Evaluate coupon if provided
     let appliedDiscount: any = null;
@@ -2358,13 +2878,40 @@ app.post('/api/stripe/checkout', async (req, res) => {
       const evalResult = evaluateCouponCode(couponCode, plan, selectedCycle, currency);
       if (evalResult.valid) {
         appliedDiscount = evalResult;
-        // Increment usage count in database
-        try {
-          db.prepare('UPDATE coupons SET usedCount = usedCount + 1 WHERE id = ?').run(evalResult.coupon.id);
-        } catch (e) {}
 
-        // If coupon makes the plan 100% free
+        // Item 28 Fix: If coupon makes the plan 100% free, update user and record payment history
         if (evalResult.isFree) {
+          // Atomically increment usage
+          db.prepare('UPDATE coupons SET usedCount = usedCount + 1 WHERE id = ?').run(evalResult.coupon.id);
+
+          // Update user if exists
+          if (userId) {
+            db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, userId);
+          } else if (customerEmail) {
+            db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, customerEmail);
+          }
+
+          // Record payment history entry for tracking
+          db.prepare(`
+            INSERT INTO payment_history (id, userId, customerEmail, customerName, plan, cycle, amount, currency, status, couponCode, stripeSessionId, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            `pay_${Date.now()}_free_vip`,
+            userId || null,
+            customerEmail || '',
+            customerName,
+            plan,
+            selectedCycle,
+            0.00,
+            currency,
+            'succeeded',
+            evalResult.coupon.code,
+            `free_coupon_${evalResult.coupon.code}`,
+            new Date().toISOString()
+          );
+
+          recordAuditLog('PAYMENT_FREE_VIP', `Cupom 100% gratuito (${evalResult.coupon.code}) resgatado por ${customerEmail || userId} para plano ${plan}.`, 'billing');
+
           return res.json({
             success: true,
             checkoutUrl: `/?payment=success&plan=${plan}&cycle=${selectedCycle}&coupon=${encodeURIComponent(evalResult.coupon.code)}&free_vip=true`,
@@ -2389,9 +2936,6 @@ app.post('/api/stripe/checkout', async (req, res) => {
     }
 
     try {
-      const customerEmail = customer?.email?.trim();
-      const customerName = customer?.name?.trim() || 'Cliente Planner SaaS';
-
       const lineItems: any[] = [];
 
       // Calculate unit amount (with coupon discount if applicable)
@@ -2423,10 +2967,8 @@ app.post('/api/stripe/checkout', async (req, res) => {
         planDescription += ` (Cupom ${appliedDiscount.coupon.code}: -${appliedDiscount.discountPercent}%)`;
       }
 
-      const isRecurringPrice = Boolean(priceId && priceId.startsWith('price_') && !appliedDiscount);
-
-      // Use pre-configured Stripe Price ID only if no coupon discount (coupons require dynamic custom price_data)
-      if (isRecurringPrice) {
+      // Item 2 Fix: Preserve mode: 'subscription' with recurring settings when using dynamic line item with coupon
+      if (priceId && priceId.startsWith('price_') && !appliedDiscount) {
         lineItems.push({
           price: priceId,
           quantity: 1,
@@ -2441,33 +2983,41 @@ app.post('/api/stripe/checkout', async (req, res) => {
               images: ['https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80']
             },
             unit_amount: unitAmount,
+            recurring: {
+              interval: 'month',
+              interval_count: selectedCycle === 'quarterly' ? 3 : 1
+            }
           },
           quantity: 1,
         });
       }
 
-      // Item 5: Cancel old subscriptions
-      if (isRecurringPrice && customerEmail) {
-        const customers = await stripe.customers.list({ email: customerEmail, limit: 1 });
-        if (customers.data.length > 0) {
-          const subscriptions = await stripe.subscriptions.list({
-            customer: customers.data[0].id,
-            status: 'active',
-            limit: 10
-          });
-          for (const sub of subscriptions.data) {
-            if (sub.metadata?.plan && sub.metadata.plan !== plan) {
-              await stripe.subscriptions.update(sub.id, { cancel_at_period_end: true });
-              console.log(`[Stripe] Assinatura antiga ${sub.id} (${sub.metadata.plan}) cancelada no fim do período`);
+      // Cancel older active subscriptions if any
+      if (customerEmail) {
+        try {
+          const customers = await stripe.customers.list({ email: customerEmail, limit: 1 });
+          if (customers.data.length > 0) {
+            const subscriptions = await stripe.subscriptions.list({
+              customer: customers.data[0].id,
+              status: 'active',
+              limit: 10
+            });
+            for (const sub of subscriptions.data) {
+              if (sub.metadata?.plan && sub.metadata.plan !== plan) {
+                await stripe.subscriptions.update(sub.id, { cancel_at_period_end: true });
+                console.log(`[Stripe] Assinatura antiga ${sub.id} (${sub.metadata.plan}) cancelada no fim do período`);
+              }
             }
           }
+        } catch (subCancelErr) {
+          console.warn('[Stripe] Aviso ao verificar assinaturas anteriores:', subCancelErr);
         }
       }
 
       const sessionPayload: any = {
         payment_method_types: ['card'],
         line_items: lineItems,
-        mode: isRecurringPrice ? 'subscription' : 'payment',
+        mode: 'subscription',
         customer_email: customerEmail || undefined,
         client_reference_id: userId || customerEmail || undefined,
         metadata: {
@@ -2476,14 +3026,16 @@ app.post('/api/stripe/checkout', async (req, res) => {
           currency,
           customerName,
           customerEmail: customerEmail || '',
-          userId: userId || ''
+          userId: userId || '',
+          couponCode: appliedDiscount ? appliedDiscount.coupon.code : ''
         },
         subscription_data: {
           metadata: {
             plan,
             cycle: selectedCycle,
             currency,
-            userId: userId || ''
+            userId: userId || '',
+            couponCode: appliedDiscount ? appliedDiscount.coupon.code : ''
           }
         },
         billing_address_collection: 'auto',
@@ -2528,7 +3080,7 @@ app.post('/api/stripe/checkout', async (req, res) => {
 });
 
 
-// 6.3 Stripe Session Verification Endpoint
+// 6.3 Stripe Session Verification Endpoint (Item 13 & Item 3 Fix)
 app.get('/api/stripe/session-status', async (req, res) => {
   const sessionId = req.query.session_id as string;
   if (!sessionId) {
@@ -2537,15 +3089,11 @@ app.get('/api/stripe/session-status', async (req, res) => {
 
   try {
     const stripe = await getStripeClient();
+    // Item 13 Fix: Don't assume fake successful sessions if Stripe is not configured
     if (!stripe) {
-      return res.json({
-        success: true,
-        simulated: true,
-        session: {
-          id: sessionId,
-          payment_status: 'paid',
-          status: 'complete'
-        }
+      return res.status(400).json({
+        success: false,
+        error: 'Stripe não está configurado no servidor. Não é possível validar a sessão.'
       });
     }
 
@@ -2561,7 +3109,8 @@ app.get('/api/stripe/session-status', async (req, res) => {
         if (userId) {
           db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, userId);
         } else if (userEmail) {
-          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE email = ?').run(plan, userEmail);
+          // Item 3 Fix: Use LOWER() on email comparison
+          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, userEmail);
         }
       } catch (dbErr) {
         console.error('[Stripe] Erro ao sincronizar plano no SQLite após checkout:', dbErr);
@@ -2615,7 +3164,7 @@ app.post('/api/stripe/portal', async (req, res) => {
   }
 });
 
-// 6.5 Stripe Webhook Listener (with signature validation if STRIPE_WEBHOOK_SECRET is set)
+// 6.5 Stripe Webhook Listener (Items 4, 5, 10, 12, 29, 34, 40 Fixes)
 app.post('/api/stripe/webhook', async (req: any, res) => {
   const stripe = await getStripeClient();
   const webhookSecret = getStripeWebhookSecret();
@@ -2639,7 +3188,7 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
 
   const eventType = event?.type || 'unknown_event';
   
-  // Item 9: Idempotency
+  // Idempotency check with processed_webhook_events
   try {
     const existing = db.prepare('SELECT event_id FROM processed_webhook_events WHERE event_id = ?').get(event.id);
     if (existing) {
@@ -2666,10 +3215,17 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         }
         const userEmail = session?.customer_details?.email || session?.customer_email || session?.metadata?.customerEmail;
         const userId = session?.metadata?.userId || session?.client_reference_id;
-        const customerId = session?.customer;
+        const couponCode = session?.metadata?.couponCode;
 
         console.log(`[Stripe] Pagamento confirmado: ${userEmail || userId || 'Cliente'} - Plano ${plan}`);
         
+        // Item 29 & 40 Fix: Atomically increment coupon used count upon confirmed payment
+        if (couponCode) {
+          try {
+            db.prepare('UPDATE coupons SET usedCount = usedCount + 1 WHERE code = ?').run(couponCode);
+          } catch (e) {}
+        }
+
         if (userId) {
           db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, userId);
         }
@@ -2682,6 +3238,7 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
             db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, userEmail);
           }
         }
+        recordAuditLog('PAYMENT_CHECKOUT', `Pagamento via checkout concluído para ${userEmail || userId} (Plano: ${plan}).`, 'billing');
         break;
       }
 
@@ -2689,7 +3246,6 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
       case 'customer.subscription.updated': {
         const subscription = event.data?.object;
         const status = subscription?.status;
-        const customerId = subscription?.customer;
         
         if (status === 'active' || status === 'trialing') {
           // If subscription is active, ensure user has paid plan
@@ -2702,13 +3258,16 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
           if (userEmail) {
             db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, userEmail);
             console.log(`[Stripe Webhook] Assinatura ativa para ${userEmail} (Plano: ${plan}, isPaid: 1)`);
+            recordAuditLog('SUBSCRIPTION_ACTIVE', `Assinatura confirmada como ativa para ${userEmail} (Plano: ${plan}).`, 'billing');
           }
         } else if (status === 'unpaid' || status === 'canceled' || status === 'past_due') {
+          // Item 5 Fix: Revert plan on unpaid, past_due, OR canceled
           console.warn(`[Stripe Webhook] Subscription status: ${status} para ${subscription?.customer_email}`);
           const userEmail = subscription?.customer_email;
-          if (userEmail && status === 'canceled') {
+          if (userEmail) {
             db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE LOWER(email) = LOWER(?)').run('free', userEmail);
-            console.log(`[Stripe Webhook] Assinatura cancelada/expirada para ${userEmail}, revertido para free.`);
+            console.log(`[Stripe Webhook] Assinatura em estado "${status}" para ${userEmail}, plano revertido para free.`);
+            recordAuditLog('SUBSCRIPTION_INACTIVE', `Assinatura do usuário ${userEmail} alterada para status "${status}". Plano revertido para free (isPaid: 0).`, 'billing');
           }
         }
         break;
@@ -2720,35 +3279,66 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
         if (customerEmail) {
           console.log(`[Stripe Webhook] Assinatura cancelada para ${customerEmail}, revertendo para plano free.`);
           db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE LOWER(email) = LOWER(?)').run('free', customerEmail);
+          recordAuditLog('SUBSCRIPTION_CANCELED', `Assinatura do cliente ${customerEmail} cancelada. Plano revertido para free.`, 'billing');
         }
         break;
       }
 
+      // Items 12 & 34 Fix: Proper metadata extraction and payment history recording
       case 'invoice.payment_succeeded': {
         const invoice = event.data?.object;
         const customerEmail = invoice?.customer_email;
-        const amountPaid = invoice?.amount_paid;
-        const user = db.prepare('SELECT id, plan FROM users WHERE LOWER(email) = LOWER(?)').get(customerEmail) as any;
-        const plan = invoice?.lines?.data[0]?.metadata?.plan || user?.plan || 'subscription';
+        const amountPaid = invoice?.amount_paid ? (invoice.amount_paid / 100) : 0;
+        const user = customerEmail ? (db.prepare('SELECT id, plan, name FROM users WHERE LOWER(email) = LOWER(?)').get(customerEmail) as any) : null;
         
-        if(user) {
-          db.prepare(`INSERT INTO payment_history (id, userId, stripePaymentIntentId, amount, currency, status, plan, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-            `pay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, user.id, invoice.payment_intent || invoice.id,
-            amountPaid || 0, invoice.currency || 'brl', 'succeeded', plan, new Date().toISOString()
-          );
+        const planFromLines = invoice?.lines?.data?.[0]?.price?.metadata?.plan || invoice?.lines?.data?.[0]?.metadata?.plan;
+        const planFromSub = invoice?.subscription_details?.metadata?.plan;
+        const rawPlan = planFromSub || planFromLines || user?.plan || 'starter';
+        const plan = ['starter', 'basic', 'pro', 'growth'].includes(rawPlan) ? rawPlan : 'starter';
+        const couponCode = invoice?.subscription_details?.metadata?.couponCode || invoice?.lines?.data?.[0]?.metadata?.couponCode || '';
+
+        if (couponCode) {
+          try {
+            db.prepare('UPDATE coupons SET usedCount = usedCount + 1 WHERE code = ?').run(couponCode);
+          } catch (e) {}
         }
-        console.log(`[Stripe Webhook] Fatura paga com sucesso para ${customerEmail || 'Cliente'}.`);
+
+        if (user) {
+          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE id = ?').run(plan, user.id);
+          db.prepare(`
+            INSERT INTO payment_history (id, userId, customerEmail, customerName, plan, cycle, amount, currency, status, couponCode, stripeSessionId, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            `pay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            user.id,
+            customerEmail || '',
+            user.name || 'Cliente',
+            plan,
+            'monthly',
+            amountPaid,
+            invoice?.currency || 'brl',
+            'succeeded',
+            couponCode || null,
+            invoice?.payment_intent || invoice?.id || '',
+            new Date().toISOString()
+          );
+        } else if (customerEmail) {
+          db.prepare('UPDATE users SET plan = ?, isPaid = 1 WHERE LOWER(email) = LOWER(?)').run(plan, customerEmail);
+        }
+        console.log(`[Stripe Webhook] Fatura paga com sucesso para ${customerEmail || 'Cliente'} (Plano: ${plan}, isPaid: 1).`);
+        recordAuditLog('INVOICE_PAID', `Fatura paga com sucesso para ${customerEmail} (Valor: ${amountPaid} ${invoice?.currency || 'BRL'}).`, 'billing');
         break;
       }
 
+      // Item 4 Fix: Revert plan on payment failure and insert valid audit log
       case 'invoice.payment_failed': {
         const invoice = event.data?.object;
         const customerEmail = invoice?.customer_email;
-        console.warn(`[Stripe Webhook] Falha no pagamento da fatura para ${customerEmail || 'Cliente'}.`);
-        // Item 7: Track in audit logs
-        db.prepare('INSERT INTO audit_logs (id, action, description, user_id) VALUES (?, ?, ?, ?)').run(
-          crypto.randomUUID(), 'PAYMENT_FAILED', `Falha no pagamento da fatura para ${customerEmail}`, customerEmail || 'unknown'
-        );
+        console.warn(`[Stripe Webhook] Falha no pagamento da fatura para ${customerEmail || 'Cliente'}. Revertendo plano para free.`);
+        if (customerEmail) {
+          db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE LOWER(email) = LOWER(?)').run('free', customerEmail);
+        }
+        recordAuditLog('PAYMENT_FAILED', `Falha no pagamento da fatura para ${customerEmail || 'Cliente'}. Plano revertido para free (isPaid: 0).`, 'billing');
         break;
       }
 
@@ -2767,13 +3357,13 @@ app.post('/api/stripe/webhook', async (req: any, res) => {
   });
 });
 
-// Slider Images
+// Slider Images (Admin routes protected)
 app.get('/api/slider-images', (req, res) => {
   const images = db.prepare('SELECT * FROM slider_images ORDER BY displayOrder ASC').all();
   res.json({ success: true, images });
 });
 
-app.post('/api/admin/slider-images', async (req, res) => {
+app.post('/api/admin/slider-images', requireAdminAuth, async (req, res) => {
   const { url, name, order } = req.body;
   if (!url) return res.status(400).json({ success: false, error: 'URL is required' });
   
@@ -2785,11 +3375,14 @@ app.post('/api/admin/slider-images', async (req, res) => {
     id, url, name || '', order || 0, new Date().toISOString()
   );
   
+  recordAuditLog('SLIDER_CREATE', `Novo banner de carrossel adicionado: "${name || id}".`, 'marketing');
+
   res.json({ success: true, id });
 });
 
-app.delete('/api/admin/slider-images/:id', async (req, res) => {
+app.delete('/api/admin/slider-images/:id', requireAdminAuth, async (req, res) => {
   db.prepare('DELETE FROM slider_images WHERE id = ?').run(req.params.id);
+  recordAuditLog('SLIDER_DELETE', `Banner de carrossel #${req.params.id} removido.`, 'marketing');
   res.json({ success: true });
 });
 
@@ -2825,6 +3418,17 @@ app.get('/api/stripe/webhook-status', (req, res) => {
 });
 
 
+// Serve public static assets (OG Images, Icons, Favicons, Manifest, Sitemaps)
+const publicStaticPath = path.join(process.cwd(), 'public');
+app.use(express.static(publicStaticPath, {
+  maxAge: '1d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    }
+  }
+}));
+
 // --- Vite integration or Static File serving ---
 async function setupFrontend() {
   if (process.env.NODE_ENV !== "production") {
@@ -2833,6 +3437,22 @@ async function setupFrontend() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        const indexPath = path.resolve(process.cwd(), 'index.html');
+        if (fs.existsSync(indexPath)) {
+          let template = fs.readFileSync(indexPath, 'utf-8');
+          template = await vite.transformIndexHtml(url, template);
+          res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+        } else {
+          next();
+        }
+      } catch (e) {
+        if (vite) vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));

@@ -312,6 +312,9 @@ export default function LandingPage({
         const data = await response.json();
         if (response.ok && data.success) {
           if (data.isAdmin) {
+            if (data.token) {
+              localStorage.setItem('planner_admin_token', data.token);
+            }
             setSuccess(t('adminAccessDetected', 'Acesso administrativo detectado! Entrando no Painel...'));
             setTimeout(() => {
               onEnterAdminMode();
@@ -319,6 +322,9 @@ export default function LandingPage({
             return;
           }
 
+          if (data.token) {
+            localStorage.setItem('planner_user_token', data.token);
+          }
           setSuccess(t('loginSuccessRedirecting', 'Login realizado com sucesso! Redirecionando...'));
           if (data.user) {
             // Synchronize database users to localStorage
@@ -427,6 +433,9 @@ export default function LandingPage({
 
         const data = await response.json();
         if (response.ok && data.success && data.user) {
+          if (data.token) {
+            localStorage.setItem('planner_user_token', data.token);
+          }
           const registeredUser = {
             ...data.user,
             plan: isInvitee ? undefined : selectedPlan,

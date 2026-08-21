@@ -38,9 +38,11 @@ export default function IntegrationsModal({ isOpen, onClose, userId, userEmail }
     if (!userId) return;
     setIsLoading(true);
     try {
+      const userToken = localStorage.getItem('planner_user_token') || '';
       const res = await fetch('/api/connected-accounts', {
         headers: {
-          'x-user-id': userId
+          'x-user-id': userId,
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
         }
       });
       const data = await res.json();
@@ -133,10 +135,12 @@ export default function IntegrationsModal({ isOpen, onClose, userId, userEmail }
     }
     try {
       setIsLoading(true);
+      const userToken = localStorage.getItem('planner_user_token') || '';
       const res = await fetch(`/api/connected-accounts/${id}`, {
         method: 'DELETE',
         headers: {
-          'x-user-id': userId
+          'x-user-id': userId,
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
         }
       });
       const data = await res.json();

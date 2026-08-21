@@ -7,6 +7,7 @@ interface PricingSectionProps {
   className?: string;
   userEmail?: string;
   userName?: string;
+  userId?: string;
 }
 
 interface AppliedCouponInfo {
@@ -24,6 +25,7 @@ export default function PricingSection({
   className = '',
   userEmail = '',
   userName = '',
+  userId = '',
 }: PricingSectionProps) {
   const [cycle, setCycle] = useState<'monthly' | 'quarterly'>('monthly');
   const [currency, setCurrency] = useState<'brl' | 'usd'>('brl');
@@ -306,6 +308,7 @@ export default function PricingSection({
           plan: planId,
           cycle,
           currency,
+          userId: userId || undefined,
           couponCode: appliedCoupon ? appliedCoupon.code : undefined,
           customer: {
             name: userName || 'Cliente Planner SaaS',
