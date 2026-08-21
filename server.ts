@@ -561,11 +561,35 @@ function initDatabase() {
     )
   `).run();
 
-  try { db.exec("ALTER TABLE users ADD COLUMN trialStartDate TEXT"); } catch (e) {}
-  try { db.exec("ALTER TABLE users ADD COLUMN trialEndDate TEXT"); } catch (e) {}
-  try { db.exec("ALTER TABLE users ADD COLUMN isPaid INTEGER DEFAULT 0"); } catch (e) {}
+  // Dynamic Schema Migration Helper to ensure existing SQLite databases get updated seamlessly
+  const ensureColumn = (table: string, column: string, typeDef: string) => {
+    try {
+      const columns = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
+      const exists = columns.some(c => c.name === column);
+      if (!exists) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`);
+        console.log(`[Database Migration] Added column ${column} to table ${table}`);
+      }
+    } catch (err) {
+      console.warn(`[Database Migration] Note on column ${column} in ${table}:`, err);
+    }
+  };
 
-  db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_affiliate_code ON users(affiliate_code)').run();
+  // Ensure all columns exist on users table
+  ensureColumn('users', 'phone', 'TEXT');
+  ensureColumn('users', 'password', 'TEXT');
+  ensureColumn('users', 'plan', 'TEXT');
+  ensureColumn('users', 'isTeamMember', 'INTEGER DEFAULT 0');
+  ensureColumn('users', 'invitedByUserId', 'TEXT');
+  ensureColumn('users', 'permissions', 'TEXT');
+  ensureColumn('users', 'affiliate_code', 'TEXT');
+  ensureColumn('users', 'trialStartDate', 'TEXT');
+  ensureColumn('users', 'trialEndDate', 'TEXT');
+  ensureColumn('users', 'isPaid', 'INTEGER DEFAULT 0');
+
+  try {
+    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_affiliate_code ON users(affiliate_code)').run();
+  } catch (e) {}
 
   db.prepare(`
     CREATE TABLE IF NOT EXISTS affiliate_clicks (
@@ -626,6 +650,14 @@ function initDatabase() {
       value TEXT
     )
   `).run();
+
+  // Ensure all columns exist on clients, posts, and goals tables
+  ensureColumn('clients', 'userId', 'TEXT');
+  ensureColumn('posts', 'userId', 'TEXT');
+  ensureColumn('posts', 'approvalStatus', 'TEXT');
+  ensureColumn('posts', 'approvalFeedback', 'TEXT');
+  ensureColumn('posts', 'approvalDate', 'TEXT');
+  ensureColumn('goals', 'userId', 'TEXT');
 
   db.prepare(`
     CREATE TABLE IF NOT EXISTS connected_accounts (
