@@ -25,7 +25,7 @@ export default function QuickOnboardingGuide({
   // Determine completion of steps based on real state
   const hasPosts = posts.length > 0;
   const hasBrandKit = Boolean(
-    activeClient?.brandColors?.primary || 
+    (activeClient as any)?.brandColors?.primary || 
     localStorage.getItem('creator_planner_brand_kit') ||
     localStorage.getItem('creator_planner_brand_kit_v2')
   );

@@ -5,6 +5,7 @@ import LanguageSelector from './LanguageSelector';
 import { Mail, Lock, User as UserIcon, Phone, LogIn, UserPlus, Shield, Sparkles } from 'lucide-react';
 import { motion } from 'motion/react';
 import LegalTextsDialog from './LegalTextsDialog';
+import ForgotPasswordModal from './ForgotPasswordModal';
 
 interface AuthScreenProps {
   onLogin: (user: User) => void;
@@ -20,6 +21,8 @@ export default function AuthScreen({ onLogin, onEnterAdminMode }: AuthScreenProp
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
   
   // LGPD consent state
   const [lgpdConsent, setLgpdConsent] = useState(false);
@@ -320,9 +323,23 @@ export default function AuthScreen({ onLogin, onEnterAdminMode }: AuthScreenProp
 
           {/* Password Field */}
           <div className="space-y-1.5">
-            <label className="block text-[11px] font-mono font-bold uppercase text-zinc-400">
-              Senha de acesso
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="block text-[11px] font-mono font-bold uppercase text-zinc-400">
+                Senha de acesso
+              </label>
+              {isLoginTab && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordEmail(email);
+                    setIsForgotPasswordOpen(true);
+                  }}
+                  className="text-[11px] text-accent-purple hover:text-accent-orange font-medium transition-colors cursor-pointer"
+                >
+                  Esqueceu a senha?
+                </button>
+              )}
+            </div>
             <div className="relative">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500">
                 <Lock size={15} />
@@ -395,6 +412,20 @@ export default function AuthScreen({ onLogin, onEnterAdminMode }: AuthScreenProp
           type={activeLegalTab}
         />
       )}
+
+      {/* Forgot Password Recovery Modal */}
+      <ForgotPasswordModal
+        isOpen={isForgotPasswordOpen}
+        onClose={() => setIsForgotPasswordOpen(false)}
+        initialEmail={forgotPasswordEmail || email}
+        onSuccessReturnToLogin={(prefilledEmail) => {
+          setIsForgotPasswordOpen(false);
+          setIsLoginTab(true);
+          if (prefilledEmail) {
+            setEmail(prefilledEmail);
+          }
+        }}
+      />
     </div>
   );
 }

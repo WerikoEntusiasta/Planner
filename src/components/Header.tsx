@@ -7,7 +7,7 @@ import React from 'react';
 import { Platform, ContentFormat, FunnelStage, User } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import LanguageSelector from './LanguageSelector';
-import { Menu, Plus, Filter, Sparkles } from 'lucide-react';
+import { Menu, Plus, Filter, Sparkles, Lock } from 'lucide-react';
 
 interface HeaderProps {
   activePlatform: Platform | 'all';
@@ -20,6 +20,8 @@ interface HeaderProps {
   onNewPostClick: () => void;
   onOpenMobileSidebar: () => void;
   currentUser?: User | null;
+  activeTeamMembersCount?: number;
+  isLive?: boolean;
 }
 
 export default function Header({
@@ -32,9 +34,13 @@ export default function Header({
   activeView,
   onNewPostClick,
   onOpenMobileSidebar,
-  currentUser
+  currentUser,
+  activeTeamMembersCount = 1,
+  isLive = true
 }: HeaderProps) {
   const { t } = useLanguage();
+
+  const canCreate = !currentUser?.isTeamMember || !currentUser?.permissions || currentUser.permissions.createCards !== false;
 
   const renderPlatformSvg = (type: Platform, size = 15) => {
     switch (type) {
@@ -94,6 +100,13 @@ export default function Header({
               <span className="px-2 py-0.5 rounded-md text-[9px] font-mono border border-accent-purple/40 bg-accent-purple/10 text-accent-purple">
                 PRO 2026
               </span>
+              <div 
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                title={isLive ? "Conectado via WebSocket: ações refletem instantaneamente para a equipe" : "Conectando ao canal em tempo real..."}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                <span className="hidden sm:inline">Tempo Real</span>
+              </div>
             </div>
             <p className="text-xs text-zinc-400">
               Gerencie e filtre seu conteúdo multicanal em tempo real
@@ -102,12 +115,18 @@ export default function Header({
         </div>
 
         {/* Mobile New Post CTA */}
-        <button
-          onClick={onNewPostClick}
-          className="md:hidden flex items-center justify-center p-2 rounded-xl bg-gradient-to-r from-accent-purple to-accent-orange text-white shadow-md cursor-pointer"
-        >
-          <Plus size={18} />
-        </button>
+        {canCreate ? (
+          <button
+            onClick={onNewPostClick}
+            className="md:hidden flex items-center justify-center p-2 rounded-xl bg-gradient-to-r from-accent-purple to-accent-orange text-white shadow-md cursor-pointer"
+          >
+            <Plus size={18} />
+          </button>
+        ) : (
+          <div className="md:hidden p-2 rounded-xl bg-zinc-900 border border-panel-border text-zinc-600">
+            <Lock size={16} />
+          </div>
+        )}
       </div>
 
       {/* Center/Right: Filters and Actions */}
@@ -208,13 +227,20 @@ export default function Header({
         </select>
 
         {/* Desktop Plan Content CTA */}
-        <button
-          onClick={onNewPostClick}
-          className="hidden md:flex items-center gap-1.5 px-4 py-2 rounded-xl font-display font-bold text-xs bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-90 shadow-md transition-all cursor-pointer"
-        >
-          <Plus size={16} strokeWidth={2.5} />
-          <span>{t('planContent', 'Planejar Conteúdo')}</span>
-        </button>
+        {canCreate ? (
+          <button
+            onClick={onNewPostClick}
+            className="hidden md:flex items-center gap-1.5 px-4 py-2 rounded-xl font-display font-bold text-xs bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-90 shadow-md transition-all cursor-pointer"
+          >
+            <Plus size={16} strokeWidth={2.5} />
+            <span>{t('planContent', 'Planejar Conteúdo')}</span>
+          </button>
+        ) : (
+          <div className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900 border border-panel-border text-zinc-500 text-xs font-mono select-none">
+            <Lock size={13} className="text-zinc-500" />
+            <span>Criação Bloqueada</span>
+          </div>
+        )}
 
       </div>
     </header>

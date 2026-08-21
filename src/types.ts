@@ -15,6 +15,22 @@ export type ProductionStage = 'idea' | 'script' | 'recording' | 'editing' | 'app
 
 export type TeamRole = 'gestor' | 'redator' | 'designer' | 'social_media' | 'cliente';
 
+export interface UserPermissions {
+  createCards?: boolean;        // Criar novos conteúdos e cards
+  editCards?: boolean;          // Editar roteiro, título, tags e status
+  deleteCards?: boolean;        // Apagar cards e posts
+  manageClients?: boolean;      // Adicionar, renomear ou excluir marcas/clientes
+  useAI?: boolean;              // Chat IA, Assistente de Roteiro e Gerador de Carrossel
+  viewMetrics?: boolean;        // Dashboard Estratégico, Análise e Metas Semanais
+  manageCampaigns?: boolean;    // Criar e gerenciar Campanhas Sazonais e Lançamentos
+  manageBrandKit?: boolean;     // Configurar Kit de Marca, Paleta de Cores e Tom de Voz
+  productionPipeline?: boolean; // Mover etapas no Pipeline de Produção
+  creativeHub?: boolean;        // Central de Criativos e Anúncios
+  clientApproval?: boolean;     // Compartilhar links públicos e aprovação de clientes
+  manageIntegrations?: boolean; // Conexões com Meta (Instagram/Facebook) e Webhooks
+  exportData?: boolean;         // Exportação de dados (CSV, Cronograma, Relatórios)
+}
+
 export interface User {
   id: string;
   name: string;
@@ -29,12 +45,7 @@ export interface User {
   isTeamMember?: boolean;
   invitedByUserId?: string;
   role?: TeamRole;
-  permissions?: {
-    createCards?: boolean;
-    editCards?: boolean;
-    deleteCards?: boolean;
-    manageClients?: boolean;
-  };
+  permissions?: UserPermissions;
   // 15 days free trial fields
   trialStartDate?: string;
   trialEndDate?: string;
@@ -45,6 +56,8 @@ export interface Client {
   id: string;
   userId?: string;
   name: string;
+  brandColors?: string[];
+  logoUrl?: string;
 }
 
 export interface Post {

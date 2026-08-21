@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import LegalTextsDialog from './LegalTextsDialog';
+import ForgotPasswordModal from './ForgotPasswordModal';
 
 interface LandingPageProps {
   onLogin: (user: User) => void;
@@ -68,7 +69,16 @@ export default function LandingPage({
     createCards: true,
     editCards: true,
     deleteCards: true,
-    manageClients: true
+    manageClients: true,
+    useAI: true,
+    viewMetrics: true,
+    manageCampaigns: true,
+    manageBrandKit: true,
+    productionPipeline: true,
+    creativeHub: true,
+    clientApproval: true,
+    manageIntegrations: true,
+    exportData: true
   });
   const [selectedPlan, setSelectedPlan] = useState<'free' | 'starter' | 'basic' | 'pro' | 'growth'>('free');
   const [selectedBillingCycle, setSelectedBillingCycle] = useState<'monthly' | 'quarterly'>('monthly');
@@ -96,6 +106,8 @@ export default function LandingPage({
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
 
   // Check Stripe configuration on mount
   const [isStripeConfigured, setIsStripeConfigured] = useState(false);
@@ -239,17 +251,35 @@ export default function LandingPage({
       }
 
       if (inviteId) {
-        // Parse permissions from invite URL if present, defaulting to true
+        // Parse all granular permissions from invite URL if present, defaulting to true
         const canCreate = params.get('create') !== 'false';
         const canEdit = params.get('edit') !== 'false';
         const canDelete = params.get('delete') !== 'false';
         const canManage = params.get('manage') !== 'false';
+        const canAI = params.get('ai') !== 'false';
+        const canMetrics = params.get('metrics') !== 'false';
+        const canCampaigns = params.get('campaigns') !== 'false';
+        const canBrandKit = params.get('brandkit') !== 'false';
+        const canPipeline = params.get('pipeline') !== 'false';
+        const canCreatives = params.get('creatives') !== 'false';
+        const canApproval = params.get('approval') !== 'false';
+        const canIntegrations = params.get('integrations') !== 'false';
+        const canExport = params.get('export') !== 'false';
 
         setInvitePermissions({
           createCards: canCreate,
           editCards: canEdit,
           deleteCards: canDelete,
-          manageClients: canManage
+          manageClients: canManage,
+          useAI: canAI,
+          viewMetrics: canMetrics,
+          manageCampaigns: canCampaigns,
+          manageBrandKit: canBrandKit,
+          productionPipeline: canPipeline,
+          creativeHub: canCreatives,
+          clientApproval: canApproval,
+          manageIntegrations: canIntegrations,
+          exportData: canExport
         });
 
         // Try local storage first
@@ -418,11 +448,6 @@ export default function LandingPage({
         return;
       }
 
-      if (users.some(u => u.email.toLowerCase() === inputEmail)) {
-        setError(t('emailAlreadyRegistered', 'Este e-mail já está cadastrado. Tente fazer login.'));
-        return;
-      }
-
       let isInvitee = false;
       let hostId: string | undefined = undefined;
       let permissionsObj = undefined;
@@ -431,6 +456,11 @@ export default function LandingPage({
         isInvitee = true;
         hostId = invitedByHostId;
         permissionsObj = invitePermissions; // Use the configured permissions from the invite URL
+      }
+
+      if (!isInvitee && users.some(u => u.email.toLowerCase() === inputEmail)) {
+        setError(t('emailAlreadyRegistered', 'Este e-mail já está cadastrado. Tente fazer login.'));
+        return;
       }
 
       // 1. Try server-side registration first
@@ -475,7 +505,9 @@ export default function LandingPage({
             isPaid: data.user.isPaid !== undefined ? data.user.isPaid : isPaidUser
           };
 
-          const updatedUsers = [...users, registeredUser];
+          const currentUsers = getRegisteredUsers();
+          const filteredUsers = currentUsers.filter(u => u.id !== registeredUser.id && u.email.toLowerCase() !== registeredUser.email.toLowerCase());
+          const updatedUsers = [...filteredUsers, registeredUser];
           localStorage.setItem('creator_planner_registered_users', JSON.stringify(updatedUsers));
 
           // Trigger access / account stats increment
@@ -1749,9 +1781,24 @@ export default function LandingPage({
 
                 {/* Password field */}
                 <div className="space-y-1.5">
-                  <label className="block text-[10px] font-mono font-bold uppercase text-zinc-400">
-                    {t('passwordAccess', 'Senha de acesso')}
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[10px] font-mono font-bold uppercase text-zinc-400">
+                      {t('passwordAccess', 'Senha de acesso')}
+                    </label>
+                    {isLoginTab && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAuthOpen(false);
+                          setForgotPasswordEmail(email);
+                          setIsForgotPasswordOpen(true);
+                        }}
+                        className="text-[10px] text-accent-purple hover:text-accent-orange transition-colors cursor-pointer"
+                      >
+                        {t('forgotPasswordLink', 'Esqueceu a senha?')}
+                      </button>
+                    )}
+                  </div>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">
                       <Lock size={14} />
@@ -1978,6 +2025,20 @@ export default function LandingPage({
         isOpen={activeLegalTab !== null}
         type={activeLegalTab}
         onClose={() => setActiveLegalTab(null)}
+      />
+
+      <ForgotPasswordModal
+        isOpen={isForgotPasswordOpen}
+        onClose={() => setIsForgotPasswordOpen(false)}
+        initialEmail={forgotPasswordEmail || email}
+        onSuccessReturnToLogin={(prefilledEmail) => {
+          setIsForgotPasswordOpen(false);
+          setIsAuthOpen(true);
+          setIsLoginTab(true);
+          if (prefilledEmail) {
+            setEmail(prefilledEmail);
+          }
+        }}
       />
 
     </div>

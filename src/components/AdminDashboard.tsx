@@ -350,6 +350,34 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
     }
   };
 
+  // Direct Plan Change Handler
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+
+  const handleDirectChangeUserPlan = async (userId: string, newPlan: 'free' | 'starter' | 'basic' | 'pro' | 'growth') => {
+    try {
+      setUpdatingUserId(userId);
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: 'PATCH',
+        headers: getAdminAuthHeaders(),
+        body: JSON.stringify({ plan: newPlan })
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Optimistically update local users list
+        setAdminUsers(prev => prev.map(u => u.id === userId ? { ...u, plan: newPlan } : u));
+        fetchAdminUsers();
+        fetchMetrics();
+        fetchAuditLogs();
+      } else {
+        alert(data.error || 'Erro ao atualizar plano');
+      }
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
   const handleUpdateUserPlan = async () => {
     if (!editingUser) return;
     try {
@@ -1170,9 +1198,30 @@ export default function AdminDashboard({ onBackToApp, onSimulateUser }: AdminDas
                             </td>
 
                             <td className="py-3 px-4">
-                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase border ${planColors[u.plan] || planColors.free}`}>
-                                {u.plan || 'FREE'}
-                              </span>
+                              <div className="relative inline-block">
+                                <select
+                                  value={u.plan || 'free'}
+                                  disabled={updatingUserId === u.id}
+                                  onChange={(e) => handleDirectChangeUserPlan(u.id, e.target.value as any)}
+                                  className={`appearance-none pl-2.5 pr-6 py-1 rounded-lg text-[11px] font-mono font-bold uppercase border cursor-pointer transition-all focus:outline-none focus:ring-1 focus:ring-accent-purple ${
+                                    planColors[u.plan] || planColors.free
+                                  } ${updatingUserId === u.id ? 'opacity-50 cursor-wait' : 'hover:brightness-110'}`}
+                                  title="Clique para alterar o plano deste usuário imediatamente"
+                                >
+                                  <option value="free" className="bg-zinc-900 text-zinc-300 font-sans">FREE (Grátis)</option>
+                                  <option value="starter" className="bg-zinc-900 text-emerald-300 font-sans">Starter (R$ 14,99)</option>
+                                  <option value="basic" className="bg-zinc-900 text-blue-300 font-sans">Basic (R$ 29,00)</option>
+                                  <option value="pro" className="bg-zinc-900 text-purple-300 font-sans">Pro Creator (R$ 49,00)</option>
+                                  <option value="growth" className="bg-zinc-900 text-pink-300 font-sans">Growth PRO (R$ 79,00)</option>
+                                </select>
+                                <div className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center text-xs opacity-70">
+                                  {updatingUserId === u.id ? (
+                                    <RefreshCw size={10} className="animate-spin" />
+                                  ) : (
+                                    <span className="text-[9px]">▼</span>
+                                  )}
+                                </div>
+                              </div>
                             </td>
 
                             <td className="py-3 px-4 text-center font-mono font-bold text-zinc-200">

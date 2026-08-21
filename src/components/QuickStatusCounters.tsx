@@ -16,10 +16,10 @@ export default function QuickStatusCounters({
   onSwitchView,
 }: QuickStatusCountersProps) {
   const total = posts.length;
-  const draftCount = posts.filter(p => p.status === 'draft' || p.status === 'idea').length;
-  const inReviewCount = posts.filter(p => p.status === 'in_review' || p.status === 'pending_approval').length;
+  const draftCount = posts.filter(p => p.status === 'draft').length;
+  const inReviewCount = posts.filter(p => p.approvalStatus === 'pending' || (p.status as string) === 'in_review').length;
   const scheduledCount = posts.filter(p => p.status === 'scheduled').length;
-  const approvedCount = posts.filter(p => p.status === 'approved' || p.status === 'published').length;
+  const approvedCount = posts.filter(p => p.status === 'published' || p.approvalStatus === 'approved').length;
 
   const items = [
     {

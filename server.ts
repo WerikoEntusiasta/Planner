@@ -11,6 +11,7 @@ import dotenv from 'dotenv';
 import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import nodemailer from 'nodemailer';
 import { affiliateTracker } from './src/middleware/affiliateTracker';
 
 dotenv.config();
@@ -43,6 +44,138 @@ const io = new Server(httpServer, {
   }
 });
 export { io };
+
+// Real-Time Socket.IO Workspace Engine
+io.on('connection', (socket) => {
+  socket.on('join-workspace', (data: any) => {
+    const workspaceId = typeof data === 'string' ? data : data?.workspaceId;
+    if (workspaceId) {
+      socket.join(`workspace_${workspaceId}`);
+      if (typeof data === 'object' && data?.userId) {
+        if (!activeWorkspaceUsers.has(workspaceId)) {
+          activeWorkspaceUsers.set(workspaceId, new Map());
+        }
+        activeWorkspaceUsers.get(workspaceId)!.set(socket.id, {
+          userId: data.userId,
+          userName: data.userName || 'Membro',
+          lastSeen: Date.now()
+        });
+        const usersInRoom = Array.from(activeWorkspaceUsers.get(workspaceId)!.values());
+        io.to(`workspace_${workspaceId}`).emit('workspace-presence-updated', {
+          workspaceId,
+          activeUsers: usersInRoom
+        });
+      }
+    }
+  });
+
+  socket.on('leave-workspace', (data: any) => {
+    const workspaceId = typeof data === 'string' ? data : data?.workspaceId;
+    if (workspaceId) {
+      socket.leave(`workspace_${workspaceId}`);
+      if (activeWorkspaceUsers.has(workspaceId)) {
+        activeWorkspaceUsers.get(workspaceId)!.delete(socket.id);
+        const usersInRoom = Array.from(activeWorkspaceUsers.get(workspaceId)!.values());
+        io.to(`workspace_${workspaceId}`).emit('workspace-presence-updated', {
+          workspaceId,
+          activeUsers: usersInRoom
+        });
+      }
+    }
+  });
+
+  socket.on('disconnect', () => {
+    activeWorkspaceUsers.forEach((usersMap, wsId) => {
+      if (usersMap.has(socket.id)) {
+        usersMap.delete(socket.id);
+        const usersInRoom = Array.from(usersMap.values());
+        io.to(`workspace_${wsId}`).emit('workspace-presence-updated', {
+          workspaceId: wsId,
+          activeUsers: usersInRoom
+        });
+      }
+    });
+  });
+
+  // Client broadcasting direct actions for instant sub-second sync across team members
+  socket.on('workspace-action', (data: any) => {
+    if (data?.workspaceId) {
+      socket.to(`workspace_${data.workspaceId}`).emit('workspace-action-received', data);
+      socket.to(`workspace_${data.workspaceId}`).emit('workspace-action-broadcast', {
+        action: data.action,
+        payload: data.payload,
+        senderSocketId: socket.id,
+        timestamp: Date.now()
+      });
+    }
+  });
+});
+
+// Active presence tracking per workspace room
+const activeWorkspaceUsers = new Map<string, Map<string, { userId: string; userName: string; lastSeen: number }>>();
+
+io.on('connection', (socket) => {
+  let joinedWorkspaceId: string | null = null;
+  let joinedUserId: string | null = null;
+  let joinedUserName: string | null = null;
+
+  // Client registers into a specific workspace room
+  socket.on('join-workspace', (data: { workspaceId: string; userId: string; userName?: string }) => {
+    if (!data?.workspaceId || !data?.userId) return;
+    joinedWorkspaceId = String(data.workspaceId);
+    joinedUserId = String(data.userId);
+    joinedUserName = data.userName || 'Membro da Equipe';
+
+    const room = `workspace_${joinedWorkspaceId}`;
+    socket.join(room);
+
+    // Track active presence
+    if (!activeWorkspaceUsers.has(joinedWorkspaceId)) {
+      activeWorkspaceUsers.set(joinedWorkspaceId, new Map());
+    }
+    const roomUsers = activeWorkspaceUsers.get(joinedWorkspaceId)!;
+    roomUsers.set(joinedUserId, {
+      userId: joinedUserId,
+      userName: joinedUserName,
+      lastSeen: Date.now()
+    });
+
+    // Broadcast updated presence to the workspace
+    io.to(room).emit('workspace-presence-updated', {
+      workspaceId: joinedWorkspaceId,
+      activeUsers: Array.from(roomUsers.values())
+    });
+  });
+
+  // Real-time Action forwarding (Sub-millisecond latency for cards, clients, goals, statuses)
+  socket.on('workspace-action', (data: { workspaceId: string; action: string; payload?: any; senderId: string; senderName?: string }) => {
+    if (!data?.workspaceId) return;
+    const room = `workspace_${data.workspaceId}`;
+    // Broadcast instantly to all other members in the workspace
+    socket.to(room).emit('workspace-action-received', {
+      ...data,
+      timestamp: Date.now()
+    });
+  });
+
+  socket.on('disconnect', () => {
+    if (joinedWorkspaceId && joinedUserId) {
+      const room = `workspace_${joinedWorkspaceId}`;
+      const roomUsers = activeWorkspaceUsers.get(joinedWorkspaceId);
+      if (roomUsers) {
+        roomUsers.delete(joinedUserId);
+        if (roomUsers.size === 0) {
+          activeWorkspaceUsers.delete(joinedWorkspaceId);
+        } else {
+          io.to(room).emit('workspace-presence-updated', {
+            workspaceId: joinedWorkspaceId,
+            activeUsers: Array.from(roomUsers.values())
+          });
+        }
+      }
+    }
+  });
+});
 const PORT = Number(process.env.PORT) || 3000;
 
 // Trust reverse proxies
@@ -410,6 +543,60 @@ export function getBaseUrl(req?: express.Request): string {
     return `${proto}://${host}`;
   }
   return 'https://planner.amplificagroup.com';
+}
+
+// ==========================================
+// ✉️ SMTP EMAIL SERVICE
+// ==========================================
+interface EmailOptions {
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+}
+
+export async function sendEmail({ to, subject, html, text }: EmailOptions): Promise<{ success: boolean; simulated?: boolean; error?: string }> {
+  const host = process.env.SMTP_HOST;
+  const port = parseInt(process.env.SMTP_PORT || '587', 10);
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || `"Planner de Conteúdo" <${user || 'noreply@amplificagroup.com'}>`;
+
+  if (!host || !user || !pass) {
+    console.warn(`[SMTP Email Service] SMTP vars (SMTP_HOST, SMTP_USER, SMTP_PASS) not fully set. Simulating dispatch to: ${to}`);
+    console.log(`[SMTP Simulation] To: ${to} | Subject: ${subject}`);
+    return { success: true, simulated: true };
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: {
+        user,
+        pass
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    });
+
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject,
+      text: text || html.replace(/<[^>]*>?/gm, ''),
+      html
+    });
+
+    console.log(`[SMTP Email Service] Email successfully delivered to ${to}. MessageId: ${info.messageId}`);
+    return { success: true, simulated: false };
+  } catch (err: any) {
+    console.error('[SMTP Email Service] Failed to send email via SMTP:', err);
+    return { success: false, error: err.message || 'Falha ao enviar e-mail via servidor SMTP.' };
+  }
 }
 
 // --- SEO & AI DISCOVERABILITY ENDPOINTS ---
@@ -786,6 +973,21 @@ function initDatabase() {
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_creatives_share_token ON creatives(shareToken)').run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_creatives_user_client ON creatives(userId, clientId)').run();
 
+  // Password recovery resets table
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      token TEXT NOT NULL,
+      code TEXT NOT NULL,
+      expiresAt INTEGER NOT NULL,
+      used INTEGER DEFAULT 0,
+      createdAt TEXT NOT NULL
+    )
+  `).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email)').run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_password_resets_code ON password_resets(code)').run();
+
   // Clean up any test seed coupons if present
   db.prepare("DELETE FROM coupons WHERE id IN ('cp_lanca20', 'cp_creator10', 'cp_bemvindo15', 'cp_promo50', 'cp_vip100')").run();
 
@@ -839,13 +1041,13 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     return res.status(400).json({ success: false, error: 'Por favor, preencha todos os campos obrigatórios.' });
   }
 
-  // Item 21 Fix: Validate minimum password length
+  // Validate minimum password length
   if (typeof password !== 'string' || password.length < 6) {
     return res.status(400).json({ success: false, error: 'A senha deve conter no mínimo 6 caracteres.' });
   }
 
   try {
-    // Check if email already registered (case-insensitive)
+    // Check if email matches admin email
     const envAdminEmail = process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL;
     const inputEmail = email.trim().toLowerCase();
 
@@ -853,12 +1055,111 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Este e-mail está reservado para o administrador.' });
     }
 
-    const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(inputEmail);
+    const { isTeamMember: reqIsTeamMember, invitedByUserId: reqHostId, permissions: reqPermissions } = req.body;
+    const existing = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(inputEmail) as any;
+
+    // SCENARIO 1: Registering as Team Member via Invite Link
+    if (reqIsTeamMember && reqHostId) {
+      const hostUser = db.prepare('SELECT id, name, plan FROM users WHERE id = ?').get(reqHostId) as any;
+      if (!hostUser) {
+        return res.status(404).json({ success: false, error: 'Anfitrião do convite não encontrado.' });
+      }
+
+      const permissionsStr = reqPermissions ? JSON.stringify(reqPermissions) : null;
+      const hashedPassword = await hashPassword(password);
+
+      // If user already existed in database
+      if (existing) {
+        // If the existing record is a team member (e.g. was deleted/removed or re-invited)
+        if (existing.isTeamMember === 1) {
+          db.prepare(`
+            UPDATE users 
+            SET name = ?, phone = ?, password = ?, isTeamMember = 1, invitedByUserId = ?, permissions = ?, isPaid = 1, trialStartDate = NULL, trialEndDate = NULL, plan = 'free'
+            WHERE id = ?
+          `).run(
+            name.trim(),
+            phone ? phone.trim() : null,
+            hashedPassword,
+            hostUser.id,
+            permissionsStr,
+            existing.id
+          );
+
+          const userToken = generateUserToken(existing.id, inputEmail);
+          const updatedMember = {
+            id: existing.id,
+            name: name.trim(),
+            email: inputEmail,
+            phone: phone ? phone.trim() : '',
+            createdAt: existing.createdAt || new Date().toISOString(),
+            isTeamMember: true,
+            invitedByUserId: hostUser.id,
+            permissions: permissionsStr ? JSON.parse(permissionsStr) : undefined,
+            isPaid: true
+          };
+
+          return res.json({ success: true, user: updatedMember, token: userToken });
+        } else {
+          // The existing record is a primary user account
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Este e-mail já pertence a uma conta de usuário principal. Para ingressar como membro de equipe, utilize outro e-mail ou faça login em sua conta principal.' 
+          });
+        }
+      }
+
+      // If team member doesn't exist yet, create fresh record
+      const userId = `user_${crypto.randomUUID()}`;
+      const createdAt = new Date().toISOString();
+      const affiliateCode = `ref_${name.trim().toLowerCase().replace(/\s+/g, '')}_${crypto.randomBytes(3).toString('hex')}`;
+
+      db.prepare(`
+        INSERT INTO users (id, name, email, phone, password, createdAt, plan, isTeamMember, invitedByUserId, permissions, affiliate_code, trialStartDate, trialEndDate, isPaid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        userId,
+        name.trim(),
+        inputEmail,
+        phone ? phone.trim() : null,
+        hashedPassword,
+        createdAt,
+        'free',
+        1, // isTeamMember
+        hostUser.id,
+        permissionsStr,
+        affiliateCode,
+        null,
+        null,
+        1 // isPaid
+      );
+
+      const userToken = generateUserToken(userId, inputEmail);
+      const newMember = {
+        id: userId,
+        name: name.trim(),
+        email: inputEmail,
+        phone: phone ? phone.trim() : '',
+        createdAt,
+        isTeamMember: true,
+        invitedByUserId: hostUser.id,
+        permissions: permissionsStr ? JSON.parse(permissionsStr) : undefined,
+        isPaid: true
+      };
+
+      return res.json({ success: true, user: newMember, token: userToken });
+    }
+
+    // SCENARIO 2: Registering as Primary User Account (No invite)
     if (existing) {
+      if (existing.isTeamMember === 1) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Este e-mail já está cadastrado como membro de equipe. Você pode entrar diretamente pelo botão Entrar para acessar o painel da equipe. Para criar uma conta de usuário principal separada, utilize um e-mail diferente.' 
+        });
+      }
       return res.status(400).json({ success: false, error: 'Este e-mail já está cadastrado. Tente fazer login.' });
     }
 
-    // Item 31 Fix: Unpredictable crypto UUID
     const userId = `user_${crypto.randomUUID()}`;
     const createdAt = new Date().toISOString();
     
@@ -870,42 +1171,21 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     let isPaid = 0;
 
     if (assignedPlan === 'free') {
-      // Free plan is lifetime (vitalício)
       isPaid = 1;
     } else {
-      // 15 days free trial for paid plans without credit card
       trialStartDate = now.toISOString();
       trialEndDate = new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString();
       isPaid = 0;
     }
     
-    // Affiliate logic
     const affiliateCode = `ref_${name.trim().toLowerCase().replace(/\s+/g, '')}_${crypto.randomBytes(3).toString('hex')}`;
-    let invitedByUserId = null;
-    let isTeamMember = 0;
-    let permissionsStr: string | null = null;
+    let affiliateReferrerId = null;
 
-    // Check if registering as team member via invite
-    const { isTeamMember: reqIsTeamMember, invitedByUserId: reqHostId, permissions: reqPermissions } = req.body;
-    if (reqIsTeamMember && reqHostId) {
-      const hostUser = db.prepare('SELECT id, plan FROM users WHERE id = ?').get(reqHostId) as any;
-      if (hostUser) {
-        isTeamMember = 1;
-        invitedByUserId = hostUser.id;
-        permissionsStr = reqPermissions ? JSON.stringify(reqPermissions) : null;
-        isPaid = 1; // Team members inherit access
-        trialStartDate = null;
-        trialEndDate = null;
-      }
-    }
-
-    if (!invitedByUserId) {
-      const affiliateCodeFromCookie = req.cookies?.affiliate_code;
-      if (affiliateCodeFromCookie) {
-        const referrer = db.prepare('SELECT id FROM users WHERE affiliate_code = ?').get(affiliateCodeFromCookie);
-        if (referrer) {
-          invitedByUserId = (referrer as any).id;
-        }
+    const affiliateCodeFromCookie = req.cookies?.affiliate_code;
+    if (affiliateCodeFromCookie) {
+      const referrer = db.prepare('SELECT id FROM users WHERE affiliate_code = ?').get(affiliateCodeFromCookie) as any;
+      if (referrer) {
+        affiliateReferrerId = referrer.id;
       }
     }
 
@@ -915,32 +1195,31 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     `).run(
       userId,
       name.trim(),
-      email.trim().toLowerCase(),
+      inputEmail,
       phone ? phone.trim() : null,
       await hashPassword(password),
       createdAt,
-      isTeamMember ? 'free' : assignedPlan,
-      isTeamMember,
-      invitedByUserId,
-      permissionsStr,
+      assignedPlan,
+      0, // not team member
+      affiliateReferrerId,
+      null,
       affiliateCode,
       trialStartDate,
       trialEndDate,
       isPaid
     );
 
-    const userToken = generateUserToken(userId, email.trim().toLowerCase());
+    const userToken = generateUserToken(userId, inputEmail);
 
     const newUser = {
       id: userId,
       name: name.trim(),
-      email: email.trim().toLowerCase(),
+      email: inputEmail,
       phone: phone ? phone.trim() : '',
       createdAt,
-      plan: isTeamMember ? undefined : assignedPlan,
-      isTeamMember: isTeamMember === 1,
-      invitedByUserId: invitedByUserId || undefined,
-      permissions: permissionsStr ? JSON.parse(permissionsStr) : undefined,
+      plan: assignedPlan,
+      isTeamMember: false,
+      invitedByUserId: affiliateReferrerId || undefined,
       trialStartDate,
       trialEndDate,
       isPaid: isPaid === 1
@@ -949,6 +1228,267 @@ app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     res.json({ success: true, user: newUser, token: userToken });
   } catch (err: any) {
     console.error('Error in /api/auth/register:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint: Forgot Password - Request Recovery Code via Email
+app.post('/api/auth/forgot-password', authRateLimiter, async (req, res) => {
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ success: false, error: 'Por favor, informe seu e-mail cadastrado.' });
+  }
+
+  const inputEmail = email.trim().toLowerCase();
+
+  try {
+    const user = db.prepare('SELECT id, name, email FROM users WHERE LOWER(email) = LOWER(?)').get(inputEmail) as any;
+    
+    // Check if it's the admin email from env
+    const envAdminEmail = (process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const isAdmin = envAdminEmail && inputEmail === envAdminEmail;
+
+    if (!user && !isAdmin) {
+      // Return success with generic message to avoid email enumeration
+      return res.json({ 
+        success: true, 
+        message: 'Se este e-mail estiver cadastrado, o código de recuperação de senha foi enviado com sucesso!' 
+      });
+    }
+
+    const recipientName = user ? user.name : 'Administrador';
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetToken = crypto.randomBytes(24).toString('hex');
+    const resetId = `reset_${crypto.randomUUID()}`;
+    const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutes validity
+    const createdAt = new Date().toISOString();
+
+    // Invalidate previous active codes for this email
+    db.prepare('UPDATE password_resets SET used = 1 WHERE LOWER(email) = LOWER(?)').run(inputEmail);
+
+    // Store new reset request
+    db.prepare(`
+      INSERT INTO password_resets (id, email, token, code, expiresAt, used, createdAt)
+      VALUES (?, ?, ?, ?, ?, 0, ?)
+    `).run(resetId, inputEmail, resetToken, resetCode, expiresAt, createdAt);
+
+    const baseUrl = getBaseUrl(req);
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0c0d12; color: #f4f4f5; margin: 0; padding: 20px; }
+          .card { max-width: 540px; margin: 0 auto; background-color: #161822; border: 1px solid #27273a; border-radius: 16px; padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+          .header { text-align: center; margin-bottom: 24px; }
+          .logo-badge { display: inline-block; padding: 10px 18px; border-radius: 12px; background: linear-gradient(135deg, #8b5cf6, #f97316); color: #ffffff; font-weight: 800; font-size: 14px; letter-spacing: 0.5px; }
+          .title { font-size: 20px; font-weight: 800; color: #ffffff; margin-top: 16px; margin-bottom: 8px; }
+          .subtitle { font-size: 13px; color: #a1a1aa; line-height: 1.5; }
+          .code-box { background-color: #0e1017; border: 1px dashed #8b5cf6; border-radius: 12px; padding: 18px; text-align: center; margin: 24px 0; }
+          .code { font-family: monospace; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #a78bfa; }
+          .code-hint { font-size: 11px; color: #71717a; margin-top: 6px; }
+          .footer { margin-top: 28px; padding-top: 20px; border-top: 1px solid #27273a; font-size: 11px; color: #71717a; text-align: center; line-height: 1.5; }
+          .warning { font-size: 12px; color: #fbbf24; background-color: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.2); border-radius: 8px; padding: 10px; margin-top: 16px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="header">
+            <div class="logo-badge">PLANNER DE CONTEÚDO</div>
+            <h1 class="title">Recuperação de Senha</h1>
+            <p class="subtitle">Olá, <strong>${recipientName}</strong>. Recebemos uma solicitação para redefinir a senha da sua conta.</p>
+          </div>
+
+          <div class="code-box">
+            <div class="code">${resetCode}</div>
+            <div class="code-hint">Este código expira em 30 minutos.</div>
+          </div>
+
+          <p style="font-size: 13px; color: #d4d4d8; line-height: 1.6;">
+            Insira o código de 6 dígitos acima na tela do aplicativo para cadastrar uma nova senha com segurança.
+          </p>
+
+          <div class="warning">
+            🔒 Se você não solicitou a redefinição de senha, nenhuma ação é necessária. Sua senha atual permanece segura.
+          </div>
+
+          <div class="footer">
+            Planner de Conteúdo Multicanal • Segurança & Privacidade<br>
+            Este é um e-mail automático do sistema.
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const emailRes = await sendEmail({
+      to: inputEmail,
+      subject: `Código de Recuperação: ${resetCode} - Planner de Conteúdo`,
+      html: emailHtml,
+      text: `Olá, ${recipientName}. Seu código de recuperação de senha é: ${resetCode}. Ele expira em 30 minutos.`
+    });
+
+    res.json({
+      success: true,
+      message: 'Código de recuperação enviado com sucesso! Verifique sua caixa de entrada e spam.',
+      previewCode: emailRes.simulated ? resetCode : undefined
+    });
+  } catch (err: any) {
+    console.error('Error in /api/auth/forgot-password:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao processar recuperação de senha.' });
+  }
+});
+
+// Endpoint: Reset Password with Verified Code
+app.post('/api/auth/reset-password', authRateLimiter, async (req, res) => {
+  const { email, code, newPassword } = req.body;
+
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ success: false, error: 'E-mail, código de verificação e nova senha são obrigatórios.' });
+  }
+
+  if (typeof newPassword !== 'string' || newPassword.length < 6) {
+    return res.status(400).json({ success: false, error: 'A nova senha deve conter no mínimo 6 caracteres.' });
+  }
+
+  const inputEmail = email.trim().toLowerCase();
+  const inputCode = code.trim().toUpperCase();
+
+  try {
+    const now = Date.now();
+    const resetRecord = db.prepare(`
+      SELECT * FROM password_resets 
+      WHERE LOWER(email) = LOWER(?) AND UPPER(code) = ? AND used = 0 AND expiresAt > ?
+      ORDER BY expiresAt DESC LIMIT 1
+    `).get(inputEmail, inputCode, now) as any;
+
+    if (!resetRecord) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Código de recuperação inválido, incorreto ou expirado. Por favor, solicite um novo código.' 
+      });
+    }
+
+    const hashedPassword = await hashPassword(newPassword);
+
+    // Update user password in SQLite
+    const updateRes = db.prepare('UPDATE users SET password = ? WHERE LOWER(email) = LOWER(?)').run(hashedPassword, inputEmail);
+
+    // Mark reset record as used
+    db.prepare('UPDATE password_resets SET used = 1 WHERE id = ?').run(resetRecord.id);
+
+    if (updateRes.changes === 0) {
+      // Check if admin password reset attempted
+      const envAdminEmail = (process.env.VITE_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+      if (envAdminEmail && inputEmail === envAdminEmail) {
+        return res.json({ 
+          success: true, 
+          message: 'Aviso: Para contas administrativas mestre, configure também a variável VITE_ADMIN_PASSWORD nas variáveis de ambiente do servidor para permanência.' 
+        });
+      }
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado na base de dados.' });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Sua senha foi redefinida com sucesso! Você já pode fazer login com sua nova senha.' 
+    });
+  } catch (err: any) {
+    console.error('Error in /api/auth/reset-password:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao redefinir a senha.' });
+  }
+});
+
+// Endpoint: Explicitly Delete Team Member from SQLite database
+app.post('/api/team/remove-member', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação necessária.' });
+  }
+
+  const requester = auth.user;
+  const { memberId } = req.body;
+
+  if (!memberId) {
+    return res.status(400).json({ success: false, error: 'ID do membro é obrigatório.' });
+  }
+
+  try {
+    const workspaceOwnerId = requester.invitedByUserId || requester.id;
+
+    // Delete the member permanently from users table
+    const result = db.prepare('DELETE FROM users WHERE id = ? AND invitedByUserId = ?').run(memberId, workspaceOwnerId);
+
+    // Notify connected clients via Socket.io
+    io.to(`workspace_${workspaceOwnerId}`).emit('workspace-sync', {
+      action: 'remove-member',
+      payload: { userId: memberId },
+      senderId: requester.id,
+      timestamp: Date.now()
+    });
+
+    res.json({ 
+      success: true, 
+      changes: result.changes, 
+      message: 'Membro removido da equipe com sucesso.' 
+    });
+  } catch (err: any) {
+    console.error('Error in /api/team/remove-member:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint: Update Team Member Granular Permissions in SQLite database
+app.post('/api/team/update-permissions', async (req, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: auth.error || 'Autenticação necessária.' });
+  }
+
+  const requester = auth.user;
+  const { userId, permissions } = req.body;
+
+  if (!userId || !permissions) {
+    return res.status(400).json({ success: false, error: 'ID do usuário e permissões são obrigatórios.' });
+  }
+
+  try {
+    const workspaceOwnerId = requester.invitedByUserId || requester.id;
+    const permissionsStr = typeof permissions === 'string' ? permissions : JSON.stringify(permissions);
+
+    // Update in users table
+    const result = db.prepare('UPDATE users SET permissions = ? WHERE id = ? AND (invitedByUserId = ? OR id = ?)').run(
+      permissionsStr,
+      userId,
+      workspaceOwnerId,
+      workspaceOwnerId // Allow admin/owner to update
+    );
+
+    // Broadcast update via Socket.io to all workspace members in real time
+    const broadcastPayload = {
+      workspaceId: workspaceOwnerId,
+      action: 'update-permissions',
+      payload: {
+        userId,
+        permissions: typeof permissions === 'string' ? JSON.parse(permissions) : permissions
+      },
+      senderId: requester.id,
+      senderName: requester.name,
+      timestamp: Date.now()
+    };
+
+    io.to(`workspace_${workspaceOwnerId}`).emit('workspace-sync', broadcastPayload);
+    io.to(`workspace_${workspaceOwnerId}`).emit('workspace-action-received', broadcastPayload);
+    io.to(`workspace_${workspaceOwnerId}`).emit('workspace-action-broadcast', broadcastPayload);
+
+    res.json({
+      success: true,
+      changes: result.changes,
+      message: 'Permissões atualizadas com sucesso.'
+    });
+  } catch (err: any) {
+    console.error('Error in /api/team/update-permissions:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1339,6 +1879,22 @@ app.post('/api/sync', async (req, res) => {
     });
 
     syncTransaction();
+
+    // Broadcast real-time synced state to all members connected to this workspace
+    if (workspaceOwnerId) {
+      const syncPayload = {
+        workspaceId: workspaceOwnerId,
+        workspaceOwnerId,
+        senderId: requester.id,
+        senderUserId: requester.id,
+        senderName: requester.name,
+        timestamp: Date.now(),
+        data: { users, clients, posts, goals, metadata }
+      };
+      io.to(`workspace_${workspaceOwnerId}`).emit('workspace-synced', syncPayload);
+      io.to(`workspace_${workspaceOwnerId}`).emit('workspace-sync-updated', syncPayload);
+    }
+
     res.json({ success: true, message: 'Sincronização realizada com total segurança e isolamento por inquilino.' });
   } catch (error: any) {
     console.error('Error in POST /api/sync:', error);
@@ -2638,6 +3194,14 @@ app.patch('/api/admin/users/:id', requireAdminAuth, async (req, res) => {
       `Usuário ${user.email} atualizado. Plano anterior: "${user.plan}" -> Novo plano: "${newPlan}".`,
       'user_management'
     );
+
+    const wsId = user.invitedByUserId || user.id;
+    io.to(`workspace_${wsId}`).emit('workspace-user-updated', {
+      userId: id,
+      plan: newPlan,
+      name: newName,
+      timestamp: Date.now()
+    });
 
     res.json({ success: true, message: 'Dados do usuário atualizados com sucesso.' });
   } catch (err: any) {

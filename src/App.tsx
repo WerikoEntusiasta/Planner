@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Post, WeeklyGoal, Platform, ContentFormat, FunnelStage, PostStatus, Client, User } from './types';
+import { Post, WeeklyGoal, Platform, ContentFormat, FunnelStage, PostStatus, Client, User, UserPermissions } from './types';
 import { initialPosts, initialGoals } from './data';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
@@ -44,7 +44,7 @@ import TrialExpiredModal from './components/TrialExpiredModal';
 import PricingModal from './components/PricingModal';
 import { getUserTrialStatus } from './utils/trialUtils';
 import SeoRouter from './seo/SeoRouter';
-import { Sparkles, BarChart2, Calendar as CalendarIcon, Target, Plus, Heart, HelpCircle, Shield, ChevronDown } from 'lucide-react';
+import { Sparkles, BarChart2, Calendar as CalendarIcon, Target, Plus, Heart, HelpCircle, Shield, ChevronDown, Workflow, Image as ImageIcon } from 'lucide-react';
 import { useSocket } from './hooks/useSocket';
 
 export default function App() {
@@ -58,17 +58,9 @@ export default function App() {
   const [isCampaignsModalOpen, setIsCampaignsModalOpen] = useState(false);
   const [isReferenceHubModalOpen, setIsReferenceHubModalOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const socket = useSocket();
-
-  useEffect(() => {
-    if (!socket) return;
-    socket.on('post-status-updated', ({ postId, status }) => {
-      setPosts(prev => prev.map(p => p.id === postId ? { ...p, status: status === 'approved' ? 'scheduled' : 'draft' } : p));
-    });
-    return () => {
-      socket.off('post-status-updated');
-    };
-  }, [socket]);
+  const { socket, isConnected } = useSocket();
+  const [activeWorkspaceMembers, setActiveWorkspaceMembers] = useState<{ userId: string; userName: string }[]>([]);
+  const [liveSyncToast, setLiveSyncToast] = useState<{ message: string; timestamp: number } | null>(null);
 
   // Auth States
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -423,6 +415,178 @@ export default function App() {
 
   const workspaceOwnerId = (currentUser && currentUser.isTeamMember) ? currentUser.invitedByUserId : currentUser?.id;
 
+  // Real-Time Socket Connection & Multi-User Collaboration Handler
+  useEffect(() => {
+    if (!socket || !currentUser || !workspaceOwnerId || currentUser.id === 'demo_user') return;
+
+    // Join the workspace room immediately
+    socket.emit('join-workspace', {
+      workspaceId: workspaceOwnerId,
+      userId: currentUser.id,
+      userName: currentUser.name
+    });
+
+    // 1. Full Workspace State Sync from Server / Other Team Members
+    const handleSyncUpdated = (payload: any) => {
+      const targetWorkspace = payload.workspaceOwnerId || payload.workspaceId;
+      if (targetWorkspace !== workspaceOwnerId) return;
+
+      if (payload.senderId && payload.senderId !== currentUser.id) {
+        if (payload.data) {
+          const { users: newUsers, clients: newClients, posts: newPosts, goals: newGoals, metadata: newMeta } = payload.data;
+          if (Array.isArray(newUsers)) setUsers(newUsers);
+          if (Array.isArray(newClients)) setClients(newClients);
+          if (Array.isArray(newPosts)) setPosts(newPosts);
+          if (Array.isArray(newGoals)) setGoals(newGoals);
+          if (newMeta && newMeta.activeClientId) {
+            setActiveClientId(prev => {
+              const stillExists = newClients?.some((c: any) => c.id === prev);
+              return stillExists ? prev : (newMeta.activeClientId || (newClients?.[0]?.id ?? ''));
+            });
+          }
+        }
+        setLiveSyncToast({
+          message: `⚡ ${payload.senderName || 'Membro da equipe'} atualizou o painel em tempo real`,
+          timestamp: Date.now()
+        });
+      }
+    };
+
+    // 2. Instant Action Forwarding (Sub-millisecond latency reflection)
+    const handleActionReceived = (payload: any) => {
+      if (payload.workspaceId !== workspaceOwnerId) return;
+      if (payload.senderId && payload.senderId !== currentUser.id) {
+        const actorName = payload.senderName || 'Membro da equipe';
+
+        if (payload.action === 'save-post' && payload.payload) {
+          const post = payload.payload;
+          setPosts(prev => {
+            const exists = prev.some(p => p.id === post.id);
+            return exists ? prev.map(p => p.id === post.id ? post : p) : [post, ...prev];
+          });
+          setLiveSyncToast({
+            message: `⚡ ${actorName} salvou o card "${post.title?.slice(0, 24) || 'Conteúdo'}"`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'delete-post' && payload.payload?.id) {
+          setPosts(prev => prev.filter(p => p.id !== payload.payload.id));
+          setLiveSyncToast({
+            message: `⚡ ${actorName} removeu um card de conteúdo`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'update-status' && payload.payload?.id) {
+          setPosts(prev => prev.map(p => p.id === payload.payload.id ? { ...p, status: payload.payload.newStatus } : p));
+          setLiveSyncToast({
+            message: `⚡ ${actorName} moveu o status de um post`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'create-client' && payload.payload) {
+          setClients(prev => {
+            const exists = prev.some(c => c.id === payload.payload.id);
+            return exists ? prev : [...prev, payload.payload];
+          });
+          setLiveSyncToast({
+            message: `⚡ ${actorName} cadastrou o cliente "${payload.payload.name}"`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'rename-client' && payload.payload) {
+          setClients(prev => prev.map(c => c.id === payload.payload.id ? { ...c, name: payload.payload.name } : c));
+          setLiveSyncToast({
+            message: `⚡ ${actorName} alterou o nome de um cliente`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'add-goal' && payload.payload) {
+          setGoals(prev => {
+            const exists = prev.some(g => g.id === payload.payload.id);
+            return exists ? prev : [...prev, payload.payload];
+          });
+          setLiveSyncToast({
+            message: `⚡ ${actorName} adicionou uma nova meta`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'toggle-goal' && payload.payload?.id) {
+          setGoals(prev => prev.map(g => g.id === payload.payload.id ? { ...g, completed: !g.completed } : g));
+          setLiveSyncToast({
+            message: `⚡ ${actorName} atualizou o progresso da meta`,
+            timestamp: Date.now()
+          });
+        } else if (payload.action === 'update-permissions' && payload.payload?.userId) {
+          const targetId = payload.payload.userId;
+          const newPerms = payload.payload.permissions;
+          setUsers(prev => prev.map(u => u.id === targetId ? { ...u, permissions: newPerms } : u));
+          
+          if (currentUser && currentUser.id === targetId) {
+            setCurrentUser(prev => prev ? { ...prev, permissions: newPerms } : null);
+            setLiveSyncToast({
+              message: `⚡ Suas permissões de acesso foram atualizadas em tempo real pelo administrador`,
+              timestamp: Date.now()
+            });
+          } else {
+            setLiveSyncToast({
+              message: `⚡ ${actorName} atualizou permissões de membro`,
+              timestamp: Date.now()
+            });
+          }
+        } else if (payload.action === 'remove-member' && payload.payload?.userId) {
+          setUsers(prev => prev.filter(u => u.id !== payload.payload.userId));
+        }
+      }
+    };
+
+    // 3. Online Team Presence Tracking
+    const handlePresence = (payload: any) => {
+      if (payload.workspaceId === workspaceOwnerId && Array.isArray(payload.activeUsers)) {
+        setActiveWorkspaceMembers(payload.activeUsers);
+      }
+    };
+
+    // 4. Client Approval Status Updates
+    const handlePostStatusUpdated = ({ postId, status }: { postId: string; status: string }) => {
+      setPosts(prev => prev.map(p => p.id === postId ? { 
+        ...p, 
+        status: status === 'approved' ? 'scheduled' : 'draft',
+        approvalStatus: status === 'approved' ? 'approved' : 'rejected' 
+      } : p));
+      setLiveSyncToast({
+        message: `⚡ Status de aprovação atualizado para "${status === 'approved' ? 'Aprovado' : 'Revisão'}"`,
+        timestamp: Date.now()
+      });
+    };
+
+    socket.on('workspace-sync-updated', handleSyncUpdated);
+    socket.on('workspace-synced', handleSyncUpdated);
+    socket.on('workspace-action-received', handleActionReceived);
+    socket.on('workspace-presence-updated', handlePresence);
+    socket.on('post-status-updated', handlePostStatusUpdated);
+
+    return () => {
+      socket.off('workspace-sync-updated', handleSyncUpdated);
+      socket.off('workspace-synced', handleSyncUpdated);
+      socket.off('workspace-action-received', handleActionReceived);
+      socket.off('workspace-presence-updated', handlePresence);
+      socket.off('post-status-updated', handlePostStatusUpdated);
+    };
+  }, [socket, currentUser, workspaceOwnerId]);
+
+  // Auto-dismiss live toast after 3.5s
+  useEffect(() => {
+    if (!liveSyncToast) return;
+    const t = setTimeout(() => setLiveSyncToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [liveSyncToast]);
+
+  // Instant action broadcaster to connected team members
+  const emitWorkspaceAction = (action: string, payload?: any) => {
+    if (!socket || !workspaceOwnerId || !currentUser || currentUser.id === 'demo_user') return;
+    socket.emit('workspace-action', {
+      workspaceId: workspaceOwnerId,
+      action,
+      payload,
+      senderId: currentUser.id,
+      senderName: currentUser.name
+    });
+  };
+
   // Auto-correct workspace client state for the logged-in user
   useEffect(() => {
     if (!currentUser || !workspaceOwnerId) return;
@@ -460,7 +624,7 @@ export default function App() {
 
     const timer = setTimeout(() => {
       syncToDatabase(users, clients, posts, goals, { activeClientId });
-    }, 1000);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [users, clients, posts, goals, activeClientId, hasLoadedData]);
@@ -597,7 +761,7 @@ export default function App() {
   }, [isSimulatedSession, currentUser, activeClientId]);
 
   // Core Permissions & Plan Validation Helpers
-  const checkPermission = (action: 'createCards' | 'editCards' | 'deleteCards' | 'manageClients'): boolean => {
+  const checkPermission = (action: keyof UserPermissions): boolean => {
     if (!currentUser) return false;
     if (!currentUser.isTeamMember) return true; // Host/Owner has all permissions
     
@@ -605,9 +769,18 @@ export default function App() {
       createCards: true,
       editCards: true,
       deleteCards: true,
-      manageClients: true
+      manageClients: true,
+      useAI: true,
+      viewMetrics: true,
+      manageCampaigns: true,
+      manageBrandKit: true,
+      productionPipeline: true,
+      creativeHub: true,
+      clientApproval: true,
+      manageIntegrations: true,
+      exportData: true
     };
-    return !!perms[action];
+    return perms[action] !== false;
   };
 
   const getWorkspaceOwnerUser = (): User | null => {
@@ -663,7 +836,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateMemberPermissions = (userId: string, permissions: NonNullable<User['permissions']>) => {
+  const handleUpdateMemberPermissions = async (userId: string, permissions: NonNullable<User['permissions']>) => {
     const updatedUsers = users.map(u => {
       if (u.id === userId) {
         return { ...u, permissions };
@@ -671,11 +844,70 @@ export default function App() {
       return u;
     });
     setUsers(updatedUsers);
+
+    // If updating current user (host testing permissions or self), update session immediately
+    if (currentUser && currentUser.id === userId) {
+      setCurrentUser(prev => prev ? { ...prev, permissions } : null);
+    }
+
+    // Persist to localStorage
+    try {
+      const savedUsersStr = localStorage.getItem('creator_planner_registered_users');
+      if (savedUsersStr) {
+        const parsed = JSON.parse(savedUsersStr) as User[];
+        const updated = parsed.map(u => u.id === userId ? { ...u, permissions } : u);
+        localStorage.setItem('creator_planner_registered_users', JSON.stringify(updated));
+      }
+    } catch (e) {}
+
+    // Persist to server SQLite database
+    try {
+      const token = localStorage.getItem('planner_user_token') || localStorage.getItem('planner_admin_token');
+      await fetch('/api/team/update-permissions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ userId, permissions })
+      });
+    } catch (err) {
+      console.error('Error updating member permissions on server:', err);
+    }
+
+    emitWorkspaceAction('update-permissions', { userId, permissions });
   };
 
-  const handleRemoveMember = (userId: string) => {
+  const handleRemoveMember = async (userId: string) => {
     const updatedUsers = users.filter(u => u.id !== userId);
     setUsers(updatedUsers);
+
+    // Sync to local storage
+    try {
+      const savedUsersStr = localStorage.getItem('creator_planner_registered_users');
+      if (savedUsersStr) {
+        const parsed = JSON.parse(savedUsersStr) as User[];
+        const filtered = parsed.filter(u => u.id !== userId);
+        localStorage.setItem('creator_planner_registered_users', JSON.stringify(filtered));
+      }
+    } catch (e) {}
+
+    // Call server to remove member from database
+    try {
+      const token = localStorage.getItem('planner_user_token') || localStorage.getItem('planner_admin_token');
+      await fetch('/api/team/remove-member', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ memberId: userId })
+      });
+    } catch (err) {
+      console.error('Error removing team member from server:', err);
+    }
+
+    emitWorkspaceAction('remove-member', { userId });
   };
 
   // Core Actions
@@ -718,6 +950,7 @@ export default function App() {
     };
     setClients([...clients, newClient]);
     setActiveClientId(newClient.id);
+    emitWorkspaceAction('create-client', newClient);
   };
 
   const handleRenameClient = (clientId: string, newName: string) => {
@@ -729,6 +962,7 @@ export default function App() {
     }
     const updated = clients.map((c) => (c.id === clientId ? { ...c, name: newName } : c));
     setClients(updated);
+    emitWorkspaceAction('rename-client', { id: clientId, name: newName });
   };
 
   const handleSavePost = (savedPost: Post) => {
@@ -760,6 +994,7 @@ export default function App() {
       updatedPosts = [postWithUser, ...posts];
     }
     setPosts(updatedPosts);
+    emitWorkspaceAction('save-post', postWithUser);
   };
 
   const handleDeletePost = (id: string) => {
@@ -770,6 +1005,7 @@ export default function App() {
     }
     const updatedPosts = posts.filter((p) => p.id !== id);
     setPosts(updatedPosts);
+    emitWorkspaceAction('delete-post', { id });
   };
 
   const handleDuplicatePost = (post: Post) => {
@@ -789,6 +1025,7 @@ export default function App() {
     };
     const updated = [duplicated, ...posts];
     setPosts(updated);
+    emitWorkspaceAction('save-post', duplicated);
   };
 
   const handleUpdateStatus = (id: string, newStatus: PostStatus) => {
@@ -799,6 +1036,7 @@ export default function App() {
     }
     const updated = posts.map((p) => (p.id === id ? { ...p, status: newStatus } : p));
     setPosts(updated);
+    emitWorkspaceAction('update-status', { id, newStatus });
   };
 
   const handleToggleGoal = (id: string) => {
@@ -809,6 +1047,7 @@ export default function App() {
     }
     const updated = goals.map((g) => (g.id === id ? { ...g, completed: !g.completed } : g));
     setGoals(updated);
+    emitWorkspaceAction('toggle-goal', { id });
   };
 
   const handleAddGoal = (title: string, platform: Platform) => {
@@ -830,6 +1069,7 @@ export default function App() {
     };
     const updated = [...goals, newGoal];
     setGoals(updated);
+    emitWorkspaceAction('add-goal', newGoal);
   };
 
   // Instant Idea Inserter from Seeder Sidebar
@@ -857,6 +1097,7 @@ export default function App() {
 
     const updated = [newQuickPost, ...posts];
     setPosts(updated);
+    emitWorkspaceAction('save-post', newQuickPost);
 
     // Open immediately for customization in full-page editor view
     setEditPostTarget(newQuickPost);
@@ -866,6 +1107,10 @@ export default function App() {
   // Triggers full-page editor view from top buttons
   const handleOpenCreateDialog = () => {
     if (checkTrialReadOnly()) return;
+    if (!checkPermission('createCards')) {
+      alert('Você não tem permissão para criar novos conteúdos no workspace.');
+      return;
+    }
     setEditPostTarget(null);
     setCalendarTargetDate(undefined);
     setActiveView('editor');
@@ -874,6 +1119,10 @@ export default function App() {
   // Triggers full-page editor view with selected date relative from calendar click
   const handleAddPostToSpecificDate = (dateStr: string) => {
     if (checkTrialReadOnly()) return;
+    if (!checkPermission('createCards')) {
+      alert('Você não tem permissão para criar novos conteúdos no workspace.');
+      return;
+    }
     setEditPostTarget(null);
     setCalendarTargetDate(dateStr);
     setActiveView('editor');
@@ -885,10 +1134,10 @@ export default function App() {
     setActiveView('editor');
   };
 
-  // Filter clients, posts and goals for the current active user and client
-  const userClients = clients.filter((c) => c.userId === currentUser?.id);
-  const clientPosts = posts.filter((post) => post.clientId === activeClientId && post.userId === currentUser?.id);
-  const clientGoals = goals.filter((goal) => goal.clientId === activeClientId && goal.userId === currentUser?.id);
+  // Filter clients, posts and goals for the current workspace
+  const userClients = clients.filter((c) => c.userId === workspaceOwnerId);
+  const clientPosts = posts.filter((post) => post.clientId === activeClientId && (post.userId === workspaceOwnerId || !post.userId || post.userId === currentUser?.id));
+  const clientGoals = goals.filter((goal) => goal.clientId === activeClientId && (goal.userId === workspaceOwnerId || !goal.userId || goal.userId === currentUser?.id));
 
   // Perform advanced multi-selector filtering on the active client's posts
   const filteredPosts = clientPosts.filter((post) => {
@@ -896,10 +1145,10 @@ export default function App() {
     const matchesStage = activeStage === 'all' || post.funnelStage === activeStage;
     const matchesFormat = activeFormat === 'all' || post.format === activeFormat;
     const matchesStatus = statusFilter === 'all' || 
-      (statusFilter === 'in_review' && (post.status === 'in_review' || (post as any).status === 'pending_approval')) ||
+      (statusFilter === 'in_review' && (post.approvalStatus === 'pending' || (post.status as string) === 'in_review')) ||
       (statusFilter === 'scheduled' && post.status === 'scheduled') ||
-      (statusFilter === 'approved' && (post.status === 'approved' || post.status === 'published')) ||
-      (statusFilter === 'draft' && (post.status === 'draft' || (post as any).status === 'idea'));
+      (statusFilter === 'approved' && (post.status === 'published' || post.approvalStatus === 'approved')) ||
+      (statusFilter === 'draft' && post.status === 'draft');
     return matchesPlatform && matchesStage && matchesFormat && matchesStatus;
   });
 
@@ -1057,12 +1306,36 @@ export default function App() {
         onOpenTeamModal={() => setIsTeamModalOpen(true)}
         onOpenSupportModal={() => setIsSupportModalOpen(true)}
         onOpenLGPDModal={() => setIsLGPDModalOpen(true)}
-        onOpenIntegrationsModal={() => setComingSoonFeature('integrations')}
-        onOpenBrandKitModal={() => setIsBrandKitModalOpen(true)}
+        onOpenIntegrationsModal={() => {
+          if (!checkPermission('manageIntegrations')) {
+            alert('Acesso restrito: Você não tem permissão para configurar integrações.');
+            return;
+          }
+          setComingSoonFeature('integrations');
+        }}
+        onOpenBrandKitModal={() => {
+          if (!checkPermission('manageBrandKit')) {
+            alert('Acesso restrito: Você não tem permissão para gerenciar o Kit de Marca.');
+            return;
+          }
+          setIsBrandKitModalOpen(true);
+        }}
         onOpenHashtagLibraryModal={() => setIsHashtagModalOpen(true)}
-        onOpenCampaignsModal={() => setIsCampaignsModalOpen(true)}
+        onOpenCampaignsModal={() => {
+          if (!checkPermission('manageCampaigns')) {
+            alert('Acesso restrito: Você não tem permissão para gerenciar campanhas.');
+            return;
+          }
+          setIsCampaignsModalOpen(true);
+        }}
         onOpenReferenceHubModal={() => setIsReferenceHubModalOpen(true)}
-        onOpenCarouselAIModal={() => setComingSoonFeature('carousel_ai')}
+        onOpenCarouselAIModal={() => {
+          if (!checkPermission('useAI')) {
+            alert('Acesso restrito: Você não tem permissão para utilizar ferramentas de Inteligência Artificial.');
+            return;
+          }
+          setComingSoonFeature('carousel_ai');
+        }}
         isSimulatedSession={isSimulatedSession}
         onExitSimulation={() => {
           setIsSimulatedSession(false);
@@ -1182,6 +1455,8 @@ export default function App() {
             onNewPostClick={handleOpenCreateDialog}
             onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
             currentUser={currentUser}
+            activeTeamMembersCount={activeWorkspaceMembers.length || 1}
+            isLive={isConnected}
           />
         </div>
 
@@ -1205,7 +1480,7 @@ export default function App() {
             posts={clientPosts}
             selectedStatusFilter={statusFilter}
             onSelectStatusFilter={(newStatus) => setStatusFilter(newStatus)}
-            onSwitchView={(v) => setActiveView(v)}
+            onSwitchView={(v: any) => setActiveView(v)}
           />
 
           {/* Discrete Free Plan Contact Warning Banner */}
@@ -1341,67 +1616,139 @@ export default function App() {
             )}
 
             {activeView === 'pipeline' && (
-              <ProductionPipelineView
-                posts={filteredPosts}
-                onOpenPostDialog={handleCardClick}
-                onUpdatePostStage={(postId, stage) => {
-                  setPosts(prev => prev.map(p => {
-                    if (p.id === postId) {
-                      const newStatus: PostStatus = stage === 'published' ? 'published' : stage === 'scheduled' ? 'scheduled' : 'production';
-                      return { ...p, productionStage: stage, status: newStatus };
-                    }
-                    return p;
-                  }));
-                }}
-              />
+              !checkPermission('productionPipeline') ? (
+                <div className="p-12 text-center bg-panel-card/60 border border-panel-border rounded-2xl space-y-4 max-w-lg mx-auto my-12 animate-fade-in">
+                  <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-panel-border flex items-center justify-center text-blue-400 mx-auto shadow-inner">
+                    <Workflow size={24} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white">Acesso ao Pipeline Bloqueado</h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Seu usuário não possui permissão para acessar ou movimentar o Pipeline de Produção neste workspace.
+                  </p>
+                  <button
+                    onClick={() => setActiveView('grid')}
+                    className="px-4 py-2 rounded-xl bg-accent-purple text-white text-xs font-bold hover:opacity-90 transition-all cursor-pointer"
+                  >
+                    Voltar para o Grid
+                  </button>
+                </div>
+              ) : (
+                <ProductionPipelineView
+                  posts={filteredPosts}
+                  onOpenPostDialog={handleCardClick}
+                  onUpdatePostStage={(postId, stage) => {
+                    setPosts(prev => prev.map(p => {
+                      if (p.id === postId) {
+                        const newStatus: PostStatus = stage === 'published' ? 'published' : stage === 'scheduled' ? 'scheduled' : 'production';
+                        return { ...p, productionStage: stage, status: newStatus };
+                      }
+                      return p;
+                    }));
+                  }}
+                />
+              )
             )}
 
             {activeView === 'dashboard' && (
-              <DashboardView
-                posts={filteredPosts}
-              />
+              !checkPermission('viewMetrics') ? (
+                <div className="p-12 text-center bg-panel-card/60 border border-panel-border rounded-2xl space-y-4 max-w-lg mx-auto my-12 animate-fade-in">
+                  <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-panel-border flex items-center justify-center text-emerald-400 mx-auto shadow-inner">
+                    <BarChart2 size={24} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white">Dashboard de Métricas Bloqueado</h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    O administrador do workspace desabilitou a visualização do painel de métricas e conversões para a sua conta.
+                  </p>
+                  <button
+                    onClick={() => setActiveView('grid')}
+                    className="px-4 py-2 rounded-xl bg-accent-purple text-white text-xs font-bold hover:opacity-90 transition-all cursor-pointer"
+                  >
+                    Voltar para o Grid
+                  </button>
+                </div>
+              ) : (
+                <DashboardView
+                  posts={filteredPosts}
+                />
+              )
             )}
 
             {activeView === 'carousel-ai' && (
-              <CarouselAICreatorModal
-                isPageView={true}
-                userPlan={currentUser?.plan || 'free'}
-                isTeamMember={currentUser?.isTeamMember || false}
-                userId={currentUser?.id}
-                onOpenPricing={() => setIsTeamModalOpen(true)}
-                onCreatePost={(postData) => {
-                  if (!currentUser || !workspaceOwnerId) return;
-                  const newPost: Post = {
-                    id: `post_${Date.now()}`,
-                    userId: workspaceOwnerId,
-                    clientId: activeClientId,
-                    title: postData.title || 'Carrossel IA',
-                    platform: postData.platform || 'instagram',
-                    format: postData.format || 'carousel',
-                    funnelStage: postData.funnelStage || 'MOFU',
-                    status: postData.status || 'draft',
-                    scheduledDate: postData.scheduledDate || '2026-06-14',
-                    scheduledTime: postData.scheduledTime || '18:00',
-                    description: postData.description || '',
-                    hashtags: postData.hashtags || [],
-                    hookText: postData.hookText || '',
-                    scriptText: postData.scriptText || '',
-                    visualIdea: postData.visualIdea || ''
-                  };
-                  setPosts([newPost, ...posts]);
-                  setEditPostTarget(newPost);
-                  setActiveView('editor');
-                }}
-              />
+              !checkPermission('useAI') ? (
+                <div className="p-12 text-center bg-panel-card/60 border border-panel-border rounded-2xl space-y-4 max-w-lg mx-auto my-12 animate-fade-in">
+                  <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-panel-border flex items-center justify-center text-purple-400 mx-auto shadow-inner">
+                    <Sparkles size={24} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white">Criador IA Bloqueado</h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    O uso de recursos de Inteligência Artificial está restrito pelo administrador do workspace para o seu usuário.
+                  </p>
+                  <button
+                    onClick={() => setActiveView('grid')}
+                    className="px-4 py-2 rounded-xl bg-accent-purple text-white text-xs font-bold hover:opacity-90 transition-all cursor-pointer"
+                  >
+                    Voltar para o Grid
+                  </button>
+                </div>
+              ) : (
+                <CarouselAICreatorModal
+                  isPageView={true}
+                  userPlan={currentUser?.plan || 'free'}
+                  isTeamMember={currentUser?.isTeamMember || false}
+                  userId={currentUser?.id}
+                  onOpenPricing={() => setIsTeamModalOpen(true)}
+                  onCreatePost={(postData) => {
+                    if (!currentUser || !workspaceOwnerId) return;
+                    const newPost: Post = {
+                      id: `post_${Date.now()}`,
+                      userId: workspaceOwnerId,
+                      clientId: activeClientId,
+                      title: postData.title || 'Carrossel IA',
+                      platform: postData.platform || 'instagram',
+                      format: postData.format || 'carousel',
+                      funnelStage: postData.funnelStage || 'MOFU',
+                      status: postData.status || 'draft',
+                      scheduledDate: postData.scheduledDate || '2026-06-14',
+                      scheduledTime: postData.scheduledTime || '18:00',
+                      description: postData.description || '',
+                      hashtags: postData.hashtags || [],
+                      hookText: postData.hookText || '',
+                      scriptText: postData.scriptText || '',
+                      visualIdea: postData.visualIdea || ''
+                    };
+                    setPosts([newPost, ...posts]);
+                    setEditPostTarget(newPost);
+                    setActiveView('editor');
+                  }}
+                />
+              )
             )}
 
             {activeView === 'creatives' && (
-              <CreativeHubView
-                clients={userClients}
-                activeClientId={activeClientId}
-                currentUser={currentUser}
-                onOpenPricing={() => setIsPricingModalOpen(true)}
-              />
+              !checkPermission('creativeHub') ? (
+                <div className="p-12 text-center bg-panel-card/60 border border-panel-border rounded-2xl space-y-4 max-w-lg mx-auto my-12 animate-fade-in">
+                  <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-panel-border flex items-center justify-center text-pink-400 mx-auto shadow-inner">
+                    <ImageIcon size={24} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white">Central de Criativos Bloqueada</h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Você não tem permissão para visualizar ou gerenciar a central de criativos de mídia e anúncios neste workspace.
+                  </p>
+                  <button
+                    onClick={() => setActiveView('grid')}
+                    className="px-4 py-2 rounded-xl bg-accent-purple text-white text-xs font-bold hover:opacity-90 transition-all cursor-pointer"
+                  >
+                    Voltar para o Grid
+                  </button>
+                </div>
+              ) : (
+                <CreativeHubView
+                  clients={userClients}
+                  activeClientId={activeClientId}
+                  currentUser={currentUser}
+                  onOpenPricing={() => setIsPricingModalOpen(true)}
+                />
+              )
             )}
           </div>
 
@@ -1582,6 +1929,14 @@ export default function App() {
           onOpenCampaigns={() => setIsCampaignsModalOpen(true)}
           onOpenReferenceHub={() => setIsReferenceHubModalOpen(true)}
         />
+
+        {/* Floating Real-Time Workspace Activity Toast */}
+        {liveSyncToast && (
+          <div className="fixed bottom-6 right-6 z-50 animate-bounce-in bg-panel-card/95 border border-accent-purple/50 text-white px-4 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3 text-xs max-w-sm pointer-events-none">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+            <span className="font-semibold text-zinc-100">{liveSyncToast.message}</span>
+          </div>
+        )}
 
         {/* 5. FOOTER */}
         <footer className="border-t border-panel-border/80 bg-panel-black py-4 text-center text-[11px] text-zinc-600 font-mono flex-shrink-0">

@@ -4,14 +4,14 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Platform, ContentFormat, FunnelStage, Client, User } from '../types';
+import { Platform, ContentFormat, FunnelStage, Client, User, UserPermissions } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import LanguageSelector from './LanguageSelector';
 import { 
   Calendar, Grid, Layers, Plus, Sparkles, ChevronDown, ChevronRight, UserPlus, LogOut, 
   Users, Edit3, LifeBuoy, Shield, BarChart2, Palette, Hash, Rocket, 
   Bookmark, Workflow, Menu, X, CheckCircle2, Target, TrendingUp,
-  Image as ImageIcon, Wrench
+  Image as ImageIcon, Wrench, Lock
 } from 'lucide-react';
 
 interface AppNavigationSidebarProps {
@@ -100,8 +100,20 @@ export default function AppNavigationSidebar({
 
   const activeClient = clients.find(c => c.id === activeClientId) || clients[0];
 
+  // Helper to check user granular permissions
+  const hasPerm = (key: keyof UserPermissions): boolean => {
+    if (!currentUser) return true;
+    if (!currentUser.isTeamMember) return true; // Workspace Owner always has all permissions
+    if (!currentUser.permissions) return true;
+    return currentUser.permissions[key] !== false;
+  };
+
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasPerm('manageClients')) {
+      alert('Você não tem permissão para adicionar novas marcas/clientes.');
+      return;
+    }
     if (newClientName.trim()) {
       onCreateClient(newClientName.trim());
       setNewClientName('');
@@ -109,12 +121,12 @@ export default function AppNavigationSidebar({
   };
 
   const navItems = [
-    { id: 'grid', label: t('viewCards', 'Cards Estratégicos'), icon: Grid, color: 'text-accent-purple' },
-    { id: 'calendar', label: t('editorialCalendar', 'Calendário Mensal'), icon: Calendar, color: 'text-white' },
-    { id: 'kanban', label: t('viewBoard', 'Board Kanban'), icon: Layers, color: 'text-accent-orange' },
-    { id: 'pipeline', label: 'Pipeline de Produção', icon: Workflow, color: 'text-blue-400' },
-    { id: 'creatives', label: 'Central de Criativos', icon: ImageIcon, color: 'text-pink-400' },
-    { id: 'dashboard', label: t('viewDashboard', 'Dashboard de Métricas'), icon: BarChart2, color: 'text-emerald-400' },
+    { id: 'grid', label: t('viewCards', 'Cards Estratégicos'), icon: Grid, color: 'text-accent-purple', allowed: true },
+    { id: 'calendar', label: t('editorialCalendar', 'Calendário Mensal'), icon: Calendar, color: 'text-white', allowed: true },
+    { id: 'kanban', label: t('viewBoard', 'Board Kanban'), icon: Layers, color: 'text-accent-orange', allowed: true },
+    { id: 'pipeline', label: 'Pipeline de Produção', icon: Workflow, color: 'text-blue-400', allowed: hasPerm('productionPipeline') },
+    { id: 'creatives', label: 'Central de Criativos', icon: ImageIcon, color: 'text-pink-400', allowed: hasPerm('creativeHub') },
+    { id: 'dashboard', label: t('viewDashboard', 'Dashboard de Métricas'), icon: BarChart2, color: 'text-emerald-400', allowed: hasPerm('viewMetrics') },
   ];
 
   const toolItems = [
@@ -124,23 +136,25 @@ export default function AppNavigationSidebar({
       icon: Sparkles, 
       color: 'text-accent-purple', 
       action: onOpenCarouselAIModal,
+      allowed: hasPerm('useAI'),
       isComingSoon: true 
     },
-    { id: 'brandkit', label: 'Kit de Marca', icon: Palette, color: 'text-accent-blue', action: onOpenBrandKitModal },
-    { id: 'campaigns', label: 'Campanhas Multicanal', icon: Rocket, color: 'text-accent-orange', action: onOpenCampaignsModal },
-    { id: 'reference', label: 'Central de Inspirações', icon: Bookmark, color: 'text-accent-purple', action: onOpenReferenceHubModal },
-    { id: 'hashtags', label: 'Biblioteca Hashtags', icon: Hash, color: 'text-accent-purple', action: onOpenHashtagLibraryModal },
+    { id: 'brandkit', label: 'Kit de Marca', icon: Palette, color: 'text-accent-blue', action: onOpenBrandKitModal, allowed: hasPerm('manageBrandKit') },
+    { id: 'campaigns', label: 'Campanhas Multicanal', icon: Rocket, color: 'text-accent-orange', action: onOpenCampaignsModal, allowed: hasPerm('manageCampaigns') },
+    { id: 'reference', label: 'Central de Inspirações', icon: Bookmark, color: 'text-accent-purple', action: onOpenReferenceHubModal, allowed: true },
+    { id: 'hashtags', label: 'Biblioteca Hashtags', icon: Hash, color: 'text-accent-purple', action: onOpenHashtagLibraryModal, allowed: true },
     { 
       id: 'integrations', 
       label: t('integrations', 'Integrações'), 
       icon: Workflow, 
       color: 'text-accent-orange', 
       action: onOpenIntegrationsModal,
+      allowed: hasPerm('manageIntegrations'),
       isComingSoon: true 
     },
-    { id: 'team', label: currentUser?.isTeamMember ? t('viewTeam', 'Equipa') : t('teamAndPlans', 'Equipa & Planos'), icon: Users, color: 'text-accent-orange', action: onOpenTeamModal },
-    { id: 'support', label: t('support', 'Suporte Técnico'), icon: LifeBuoy, color: 'text-accent-orange', action: onOpenSupportModal },
-    { id: 'privacy', label: t('privacy', 'Privacidade & LGPD'), icon: Shield, color: 'text-emerald-400', action: onOpenLGPDModal },
+    { id: 'team', label: currentUser?.isTeamMember ? t('viewTeam', 'Equipa & Permissões') : t('teamAndPlans', 'Equipa & Planos'), icon: Users, color: 'text-accent-orange', action: onOpenTeamModal, allowed: true },
+    { id: 'support', label: t('support', 'Suporte Técnico'), icon: LifeBuoy, color: 'text-accent-orange', action: onOpenSupportModal, allowed: true },
+    { id: 'privacy', label: t('privacy', 'Privacidade & LGPD'), icon: Shield, color: 'text-emerald-400', action: onOpenLGPDModal, allowed: true },
   ];
 
   const sidebarContent = (
@@ -267,13 +281,30 @@ export default function AppNavigationSidebar({
         {/* NEW POST CTA BUTTON */}
         <button
           onClick={() => {
+            if (!hasPerm('createCards')) {
+              alert('Você não tem permissão para criar novos conteúdos no workspace.');
+              return;
+            }
             onNewPostClick();
             setMobileOpen(false);
           }}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl font-display font-bold text-xs bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-90 shadow-lg transition-all cursor-pointer"
+          className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl font-display font-bold text-xs shadow-lg transition-all cursor-pointer ${
+            !hasPerm('createCards')
+              ? 'bg-zinc-900 border border-panel-border text-zinc-500 cursor-not-allowed opacity-75'
+              : 'bg-gradient-to-r from-accent-purple to-accent-orange text-white hover:opacity-90'
+          }`}
         >
-          <Plus size={16} strokeWidth={2.5} />
-          <span>{t('planContent', 'Planejar Conteúdo')}</span>
+          {!hasPerm('createCards') ? (
+            <>
+              <Lock size={14} />
+              <span>Criação Bloqueada</span>
+            </>
+          ) : (
+            <>
+              <Plus size={16} strokeWidth={2.5} />
+              <span>{t('planContent', 'Planejar Conteúdo')}</span>
+            </>
+          )}
         </button>
 
         {/* PRIMARY VIEWS MENU */}
@@ -285,22 +316,33 @@ export default function AppNavigationSidebar({
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeView === item.id;
+              const isAllowed = item.allowed !== false;
               return (
                 <button
                   key={item.id}
                   onClick={() => {
+                    if (!isAllowed) {
+                      alert('Acesso restrito: Esta visualização foi desabilitada para o seu usuário pelo administrador.');
+                      return;
+                    }
                     setActiveView(item.id as any);
                     setMobileOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
-                    isActive
+                    !isAllowed
+                      ? 'text-zinc-600 opacity-60 hover:opacity-100 hover:bg-zinc-950 cursor-not-allowed'
+                      : isActive
                       ? 'bg-gradient-to-r from-accent-purple/20 to-accent-orange/10 border border-accent-purple/30 text-white font-bold shadow-md'
                       : 'text-zinc-400 hover:text-white hover:bg-zinc-900/60'
                   }`}
                 >
-                  <Icon size={16} className={isActive ? 'text-accent-purple' : item.color} />
-                  <span>{item.label}</span>
-                  {isActive && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-purple" />}
+                  <Icon size={16} className={!isAllowed ? 'text-zinc-600' : isActive ? 'text-accent-purple' : item.color} />
+                  <span className={!isAllowed ? 'line-through text-zinc-600' : ''}>{item.label}</span>
+                  {!isAllowed ? (
+                    <Lock size={12} className="ml-auto text-zinc-500" />
+                  ) : isActive && (
+                    <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-purple" />
+                  )}
                 </button>
               );
             })}
@@ -360,27 +402,37 @@ export default function AppNavigationSidebar({
                 const isCarouselAI = tool.id === 'carousel_ai';
                 const isActive = isCarouselAI && activeView === 'carousel-ai';
                 const isComingSoon = (tool as any).isComingSoon;
+                const isAllowed = tool.allowed !== false;
                 return (
                   <button
                     key={tool.id}
                     onClick={() => {
+                      if (!isAllowed) {
+                        alert('Acesso restrito: Esta ferramenta foi desabilitada para o seu usuário pelo administrador.');
+                        return;
+                      }
                       tool.action?.();
                       setMobileOpen(false);
                     }}
                     className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer text-left group ${
-                      isActive
+                      !isAllowed
+                        ? 'text-zinc-600 opacity-60 hover:opacity-100 hover:bg-zinc-950 cursor-not-allowed'
+                        : isActive
                         ? 'bg-gradient-to-r from-accent-purple/25 to-accent-orange/15 border border-accent-purple/40 text-white font-bold shadow-md'
                         : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                     }`}
                   >
-                    <Icon size={14} className={`${tool.color} flex-shrink-0`} />
-                    <span className="truncate text-[11px]">{tool.label}</span>
-                    {isComingSoon && (
+                    <Icon size={14} className={`${!isAllowed ? 'text-zinc-600' : tool.color} flex-shrink-0`} />
+                    <span className={`truncate text-[11px] ${!isAllowed ? 'line-through text-zinc-600' : ''}`}>{tool.label}</span>
+                    {!isAllowed ? (
+                      <Lock size={11} className="ml-auto text-zinc-600 flex-shrink-0" />
+                    ) : isComingSoon ? (
                       <span className="ml-auto px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-purple-500/15 text-purple-300 border border-purple-500/30 flex-shrink-0">
                         Em Breve
                       </span>
-                    )}
-                    {isActive && !isComingSoon && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-purple" />}
+                    ) : isActive ? (
+                      <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-purple" />
+                    ) : null}
                   </button>
                 );
               })}
