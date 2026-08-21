@@ -1942,9 +1942,10 @@ app.get('/api/creatives', async (req, res) => {
       return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
     }
 
+    const workspaceOwnerId = auth.user.invitedByUserId || auth.user.id;
     const { clientId } = req.query;
-    let query = 'SELECT * FROM creatives WHERE userId = ?';
-    const params: any[] = [auth.user.id];
+    let query = 'SELECT * FROM creatives WHERE (userId = ? OR userId = ?)';
+    const params: any[] = [auth.user.id, workspaceOwnerId];
 
     if (clientId && clientId !== 'all') {
       query += ' AND clientId = ?';
@@ -1990,10 +1991,12 @@ app.post('/api/creatives', async (req, res) => {
       approvalDate
     } = req.body;
 
-    if (!title || !clientId) {
-      return res.status(400).json({ success: false, error: 'Título e Cliente são obrigatórios' });
+    if (!title) {
+      return res.status(400).json({ success: false, error: 'Título é obrigatório' });
     }
 
+    const workspaceOwnerId = auth.user.invitedByUserId || auth.user.id;
+    const resolvedClientId = clientId || 'default_client';
     const creativeId = id || `crt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const creativeShareToken = shareToken || crypto.randomBytes(16).toString('hex');
     const now = new Date().toISOString();
@@ -2016,9 +2019,9 @@ app.post('/api/creatives', async (req, res) => {
           clientFeedback = ?,
           approvalDate = ?,
           updatedAt = ?
-        WHERE id = ? AND userId = ?
+        WHERE id = ? AND (userId = ? OR userId = ?)
       `).run(
-        clientId,
+        resolvedClientId,
         clientName || null,
         title,
         description || null,
@@ -2031,7 +2034,8 @@ app.post('/api/creatives', async (req, res) => {
         approvalDate || null,
         now,
         creativeId,
-        auth.user.id
+        auth.user.id,
+        workspaceOwnerId
       );
     } else {
       db.prepare(`
@@ -2042,8 +2046,8 @@ app.post('/api/creatives', async (req, res) => {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         creativeId,
-        auth.user.id,
-        clientId,
+        workspaceOwnerId,
+        resolvedClientId,
         clientName || null,
         title,
         description || null,
@@ -2066,6 +2070,7 @@ app.post('/api/creatives', async (req, res) => {
       assets: JSON.parse(saved.assets || '[]')
     };
 
+    io.to(`workspace_${workspaceOwnerId}`).emit('creative-updated', { creativeId, status: result.status });
     io.emit('creative-updated', { creativeId, status: result.status });
     res.json({ success: true, creative: result });
   } catch (err: any) {
@@ -2082,8 +2087,9 @@ app.delete('/api/creatives/:id', async (req, res) => {
       return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
     }
 
+    const workspaceOwnerId = auth.user.invitedByUserId || auth.user.id;
     const { id } = req.params;
-    db.prepare('DELETE FROM creatives WHERE id = ? AND userId = ?').run(id, auth.user.id);
+    db.prepare('DELETE FROM creatives WHERE id = ? AND (userId = ? OR userId = ?)').run(id, auth.user.id, workspaceOwnerId);
     res.json({ success: true });
   } catch (err: any) {
     console.error('Error in DELETE /api/creatives/:id:', err);

@@ -49,7 +49,7 @@ export default function CreativeHubView({
   // Modal Form States
   const [formTitle, setFormTitle] = useState('');
   const [formDescription, setFormDescription] = useState('');
-  const [formClientId, setFormClientId] = useState(activeClientId || (clients[0]?.id || ''));
+  const [formClientId, setFormClientId] = useState(activeClientId || (clients[0]?.id || 'default_client'));
   const [formFormat, setFormFormat] = useState<CreativeFormat>('carousel');
   const [formPlatform, setFormPlatform] = useState<any>('instagram');
   const [formAspectRatio, setFormAspectRatio] = useState<'1:1' | '4:5' | '9:16' | '16:9'>('1:1');
@@ -57,16 +57,19 @@ export default function CreativeHubView({
   const [previewSlideIndex, setPreviewSlideIndex] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Update selected client if activeClientId changes
+  // Update selected client if activeClientId changes or clients populate
   useEffect(() => {
     if (activeClientId) {
       setSelectedClientId(activeClientId);
       setFormClientId(activeClientId);
+    } else if (clients.length > 0 && (!formClientId || formClientId === 'default_client')) {
+      setFormClientId(clients[0].id);
     }
-  }, [activeClientId]);
+  }, [activeClientId, clients]);
 
   // Load creatives from server
   const loadCreatives = async () => {
@@ -84,7 +87,9 @@ export default function CreativeHubView({
       const data = await res.json();
       if (res.ok && data.success && Array.isArray(data.creatives)) {
         setCreatives(data.creatives);
-        localStorage.setItem('creator_planner_creatives', JSON.stringify(data.creatives));
+        try {
+          localStorage.setItem('creator_planner_creatives', JSON.stringify(data.creatives));
+        } catch (e) {}
       }
     } catch (e) {
       console.warn('Using local creatives backup:', e);
@@ -102,13 +107,15 @@ export default function CreativeHubView({
     setEditingCreative(null);
     setFormTitle('');
     setFormDescription('');
-    setFormClientId(activeClientId || clients[0]?.id || '');
+    setFormClientId(activeClientId || clients[0]?.id || 'default_client');
     setFormFormat('carousel');
     setFormPlatform('instagram');
     setFormAspectRatio('1:1');
     setFormAssets([]);
     setPreviewSlideIndex(0);
     setUploadError(null);
+    setIsSaving(false);
+    setIsProcessingFiles(false);
     setIsModalOpen(true);
   };
 
@@ -117,18 +124,76 @@ export default function CreativeHubView({
     setEditingCreative(creative);
     setFormTitle(creative.title);
     setFormDescription(creative.description || '');
-    setFormClientId(creative.clientId);
+    setFormClientId(creative.clientId || activeClientId || clients[0]?.id || 'default_client');
     setFormFormat(creative.format);
     setFormPlatform(creative.platform);
     setFormAspectRatio(creative.aspectRatio || '1:1');
     setFormAssets(creative.assets || []);
     setPreviewSlideIndex(0);
     setUploadError(null);
+    setIsSaving(false);
+    setIsProcessingFiles(false);
     setIsModalOpen(true);
   };
 
+  // Client-side image compression helper for optimal loading, memory, and fast syncing
+  const compressImageFile = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      if (file.type === 'image/svg+xml' || file.type === 'image/gif') {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve((e.target?.result as string) || '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const maxWidth = 1600;
+        const maxHeight = 1600;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.85);
+          resolve(compressed);
+        } else {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve((e.target?.result as string) || '');
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(file);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        const reader = new FileReader();
+        reader.onload = (e) => resolve((e.target?.result as string) || '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+      };
+      img.src = objectUrl;
+    });
+  };
+
   // File Upload Handler (Supports images up to 20 slides, and large videos up to 15GB)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     setUploadError(null);
@@ -143,57 +208,64 @@ export default function CreativeHubView({
     }
 
     const filesToProcess = formFormat === 'carousel' ? fileList.slice(0, 20 - formAssets.length) : fileList.slice(0, 1);
+    setIsProcessingFiles(true);
 
-    filesToProcess.forEach((file, index) => {
-      const isVideoFile = file.type.startsWith('video/');
-      const isImageFile = file.type.startsWith('image/');
+    try {
+      const newAssets: CreativeAsset[] = [];
 
-      if (!isVideoFile && !isImageFile) {
-        setUploadError('Formato de arquivo não suportado. Por favor, envie imagens (PNG, JPG, WEBP) ou vídeos (MP4, MOV, WEBM).');
-        return;
-      }
+      for (let index = 0; index < filesToProcess.length; index++) {
+        const file = filesToProcess[index];
+        const isVideoFile = file.type.startsWith('video/');
+        const isImageFile = file.type.startsWith('image/');
 
-      // Check max video limit (15GB = 15 * 1024 * 1024 * 1024 bytes)
-      const maxVideoSize = 15 * 1024 * 1024 * 1024;
-      if (isVideoFile && file.size > maxVideoSize) {
-        setUploadError('O arquivo de vídeo selecionado excede o limite máximo suportado de 15GB.');
-        return;
-      }
+        if (!isVideoFile && !isImageFile) {
+          setUploadError('Formato de arquivo não suportado. Por favor, envie imagens (PNG, JPG, WEBP) ou vídeos (MP4, MOV, WEBM).');
+          continue;
+        }
 
-      // For instant and fluid browser rendering, use FileReader for images and Blob URL for large videos
-      if (isVideoFile) {
-        const videoBlobUrl = URL.createObjectURL(file);
-        const newAsset: CreativeAsset = {
-          id: `ast_${Date.now()}_${index}`,
-          name: file.name,
-          url: videoBlobUrl,
-          type: 'video',
-          size: file.size,
-          format: file.name.split('.').pop()?.toLowerCase(),
-          order: formAssets.length + index
-        };
-        setFormAssets(prev => [...prev, newAsset]);
-      } else {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const base64Url = event.target?.result as string;
-          const newAsset: CreativeAsset = {
+        // Check max video limit (15GB = 15 * 1024 * 1024 * 1024 bytes)
+        const maxVideoSize = 15 * 1024 * 1024 * 1024;
+        if (isVideoFile && file.size > maxVideoSize) {
+          setUploadError('O arquivo de vídeo selecionado excede o limite máximo suportado de 15GB.');
+          continue;
+        }
+
+        if (isVideoFile) {
+          const videoBlobUrl = URL.createObjectURL(file);
+          newAssets.push({
             id: `ast_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
             name: file.name,
-            url: base64Url,
-            type: 'image',
+            url: videoBlobUrl,
+            type: 'video',
             size: file.size,
             format: file.name.split('.').pop()?.toLowerCase(),
             order: formAssets.length + index
-          };
-          setFormAssets(prev => [...prev, newAsset]);
-        };
-        reader.readAsDataURL(file);
+          });
+        } else {
+          const compressedDataUrl = await compressImageFile(file);
+          if (compressedDataUrl) {
+            newAssets.push({
+              id: `ast_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
+              name: file.name,
+              url: compressedDataUrl,
+              type: 'image',
+              size: file.size,
+              format: file.name.split('.').pop()?.toLowerCase(),
+              order: formAssets.length + index
+            });
+          }
+        }
       }
-    });
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+      setFormAssets(prev => [...prev, ...newAssets]);
+    } catch (err: any) {
+      console.error('Error during file processing:', err);
+      setUploadError('Ocorreu um erro ao processar as mídias. Tente novamente.');
+    } finally {
+      setIsProcessingFiles(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -249,10 +321,7 @@ export default function CreativeHubView({
       setUploadError('Por favor, informe o título do criativo.');
       return;
     }
-    if (!formClientId) {
-      setUploadError('Por favor, selecione o cliente associado.');
-      return;
-    }
+    const resolvedClientId = formClientId || (clients[0]?.id || 'default_client');
     if (formAssets.length === 0) {
       setUploadError('Por favor, adicione pelo menos uma imagem ou vídeo ao criativo.');
       return;
@@ -261,58 +330,77 @@ export default function CreativeHubView({
     setIsSaving(true);
     setUploadError(null);
 
-    const clientObj = clients.find(c => c.id === formClientId);
-    const creativeId = editingCreative?.id || `crt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const shareToken = editingCreative?.shareToken || `appr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    try {
+      const clientObj = clients.find(c => c.id === resolvedClientId);
+      const creativeId = editingCreative?.id || `crt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const shareToken = editingCreative?.shareToken || `appr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    const newCreative: Creative = {
-      id: creativeId,
-      userId: currentUser?.id || 'user',
-      clientId: formClientId,
-      clientName: clientObj?.name || 'Cliente',
-      title: formTitle.trim(),
-      description: formDescription.trim(),
-      format: formFormat,
-      platform: formPlatform,
-      status: editingCreative ? (editingCreative.status === 'draft' ? targetStatus : editingCreative.status) : targetStatus,
-      assets: formAssets,
-      aspectRatio: formAspectRatio,
-      shareToken,
-      clientFeedback: editingCreative?.clientFeedback,
-      approvalDate: editingCreative?.approvalDate,
-      createdAt: editingCreative?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      const newCreative: Creative = {
+        id: creativeId,
+        userId: currentUser?.id || 'user',
+        clientId: resolvedClientId,
+        clientName: clientObj?.name || 'Marca Principal',
+        title: formTitle.trim(),
+        description: formDescription.trim(),
+        format: formFormat,
+        platform: formPlatform,
+        status: editingCreative ? (editingCreative.status === 'draft' ? targetStatus : editingCreative.status) : targetStatus,
+        assets: formAssets,
+        aspectRatio: formAspectRatio,
+        shareToken,
+        clientFeedback: editingCreative?.clientFeedback,
+        approvalDate: editingCreative?.approvalDate,
+        createdAt: editingCreative?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
 
-    // 1. Update local state
-    const updatedList = editingCreative
-      ? creatives.map(c => c.id === editingCreative.id ? newCreative : c)
-      : [newCreative, ...creatives];
+      // 1. Update React state immediately
+      const updatedList = editingCreative
+        ? creatives.map(c => c.id === editingCreative.id ? newCreative : c)
+        : [newCreative, ...creatives];
 
-    setCreatives(updatedList);
-    localStorage.setItem('creator_planner_creatives', JSON.stringify(updatedList));
+      setCreatives(updatedList);
 
-    // 2. Persist to server backend
-    if (currentUser) {
+      // Safe localStorage persistence (prevent QuotaExceededError crash when carousels have multiple slides)
       try {
-        const userToken = localStorage.getItem('planner_user_token') || '';
-        await fetch('/api/creatives', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-user-id': currentUser.id,
-            'x-user-password': currentUser.password || '',
-            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
-          },
-          body: JSON.stringify(newCreative)
-        });
-      } catch (err) {
-        console.error('Offline / Failed to sync creative to backend:', err);
+        localStorage.setItem('creator_planner_creatives', JSON.stringify(updatedList));
+      } catch (storageErr) {
+        console.warn('LocalStorage quota reached, syncing via server database:', storageErr);
+        try {
+          const lightweightList = updatedList.map(c => ({
+            ...c,
+            assets: c.assets.slice(0, 3)
+          }));
+          localStorage.setItem('creator_planner_creatives', JSON.stringify(lightweightList));
+        } catch (e) {}
       }
-    }
 
-    setIsSaving(false);
-    setIsModalOpen(false);
+      // 2. Persist to server backend
+      if (currentUser) {
+        try {
+          const userToken = localStorage.getItem('planner_user_token') || '';
+          await fetch('/api/creatives', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': currentUser.id,
+              'x-user-password': currentUser.password || '',
+              ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+            },
+            body: JSON.stringify(newCreative)
+          });
+        } catch (err) {
+          console.error('Offline / Failed to sync creative to backend:', err);
+        }
+      }
+
+      setIsModalOpen(false);
+    } catch (err: any) {
+      console.error('Failed to save creative:', err);
+      setUploadError(err?.message || 'Erro inesperado ao salvar criativo.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Delete Creative
@@ -756,9 +844,13 @@ export default function CreativeHubView({
                     onChange={(e) => setFormClientId(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-purple-500 cursor-pointer"
                   >
-                    {clients.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
+                    {clients.length === 0 ? (
+                      <option value="default_client">Marca Principal (Workspace)</option>
+                    ) : (
+                      clients.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))
+                    )}
                   </select>
                 </div>
 
@@ -864,8 +956,12 @@ export default function CreativeHubView({
 
                 {/* UPLOAD DROPZONE */}
                 <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-zinc-800 hover:border-purple-500/50 bg-zinc-950/60 rounded-3xl p-6 text-center cursor-pointer transition-all hover:bg-purple-950/10 group"
+                  onClick={() => !isProcessingFiles && fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-3xl p-6 text-center transition-all ${
+                    isProcessingFiles
+                      ? 'border-purple-500 bg-purple-950/20 cursor-wait'
+                      : 'border-zinc-800 hover:border-purple-500/50 bg-zinc-950/60 cursor-pointer hover:bg-purple-950/10 group'
+                  }`}
                 >
                   <input
                     type="file"
@@ -876,10 +972,16 @@ export default function CreativeHubView({
                     className="hidden"
                   />
                   <div className="w-12 h-12 rounded-2xl bg-purple-500/10 group-hover:bg-purple-500/20 text-purple-400 flex items-center justify-center mx-auto mb-2 transition-all">
-                    <Upload size={22} />
+                    {isProcessingFiles ? (
+                      <RefreshCw size={22} className="animate-spin text-purple-400" />
+                    ) : (
+                      <Upload size={22} />
+                    )}
                   </div>
                   <p className="text-xs font-bold text-white">
-                    Clique ou arraste {formFormat === 'carousel' ? 'até 20 imagens' : 'seus arquivos'} aqui
+                    {isProcessingFiles
+                      ? 'Otimizando e preparando imagens...'
+                      : `Clique ou arraste ${formFormat === 'carousel' ? 'até 20 imagens' : 'seus arquivos'} aqui`}
                   </p>
                   <p className="text-[10px] text-zinc-500 mt-1">
                     {formFormat === 'carousel' ? 'PNG, JPG, WEBP • O cliente verá em formato carrossel real' : 'Suporta arquivos de alta resolução até 15GB'}
