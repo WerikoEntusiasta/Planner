@@ -32,6 +32,11 @@ import ProductionPipelineView from './components/ProductionPipelineView';
 import CampaignsModal from './components/CampaignsModal';
 import ReferenceHubModal from './components/ReferenceHubModal';
 import CarouselAICreatorModal from './components/CarouselAICreatorModal';
+import ComingSoonModal, { ComingSoonFeatureType } from './components/ComingSoonModal';
+import QuickOnboardingGuide from './components/QuickOnboardingGuide';
+import QuickStatusCounters from './components/QuickStatusCounters';
+import FloatingQuickAction from './components/FloatingQuickAction';
+import ShareApprovalModal from './components/ShareApprovalModal';
 import PostEditorView from './components/PostEditorView';
 import StrategicMetricsRow from './components/StrategicMetricsRow';
 import TrialStatusBanner from './components/TrialStatusBanner';
@@ -88,6 +93,7 @@ export default function App() {
   const [isIntegrationsModalOpen, setIsIntegrationsModalOpen] = useState(false);
   const [isBrandKitModalOpen, setIsBrandKitModalOpen] = useState(false);
   const [isHashtagModalOpen, setIsHashtagModalOpen] = useState(false);
+  const [comingSoonFeature, setComingSoonFeature] = useState<ComingSoonFeatureType | null>(null);
   const [hasLoadedData, setHasLoadedData] = useState(false);
 
   // Payment Redirection State
@@ -134,7 +140,9 @@ export default function App() {
   const [activePlatform, setActivePlatform] = useState<Platform | 'all'>('all');
   const [activeStage, setActiveStage] = useState<FunnelStage | 'all'>('all');
   const [activeFormat, setActiveFormat] = useState<ContentFormat | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<string | 'all'>('all');
   const [showStrategicMetrics, setShowStrategicMetrics] = useState(false);
+  const [isShareApprovalModalOpen, setIsShareApprovalModalOpen] = useState(false);
 
   // Dialogue Modals State
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -887,7 +895,12 @@ export default function App() {
     const matchesPlatform = activePlatform === 'all' || post.platform === activePlatform;
     const matchesStage = activeStage === 'all' || post.funnelStage === activeStage;
     const matchesFormat = activeFormat === 'all' || post.format === activeFormat;
-    return matchesPlatform && matchesStage && matchesFormat;
+    const matchesStatus = statusFilter === 'all' || 
+      (statusFilter === 'in_review' && (post.status === 'in_review' || (post as any).status === 'pending_approval')) ||
+      (statusFilter === 'scheduled' && post.status === 'scheduled') ||
+      (statusFilter === 'approved' && (post.status === 'approved' || post.status === 'published')) ||
+      (statusFilter === 'draft' && (post.status === 'draft' || (post as any).status === 'idea'));
+    return matchesPlatform && matchesStage && matchesFormat && matchesStatus;
   });
 
   // Calculate metrics for active client only
@@ -1044,12 +1057,12 @@ export default function App() {
         onOpenTeamModal={() => setIsTeamModalOpen(true)}
         onOpenSupportModal={() => setIsSupportModalOpen(true)}
         onOpenLGPDModal={() => setIsLGPDModalOpen(true)}
-        onOpenIntegrationsModal={() => setIsIntegrationsModalOpen(true)}
+        onOpenIntegrationsModal={() => setComingSoonFeature('integrations')}
         onOpenBrandKitModal={() => setIsBrandKitModalOpen(true)}
         onOpenHashtagLibraryModal={() => setIsHashtagModalOpen(true)}
         onOpenCampaignsModal={() => setIsCampaignsModalOpen(true)}
         onOpenReferenceHubModal={() => setIsReferenceHubModalOpen(true)}
-        onOpenCarouselAIModal={() => setActiveView('carousel-ai')}
+        onOpenCarouselAIModal={() => setComingSoonFeature('carousel_ai')}
         isSimulatedSession={isSimulatedSession}
         onExitSimulation={() => {
           setIsSimulatedSession(false);
@@ -1178,6 +1191,23 @@ export default function App() {
           {/* Main Workspace Panels */}
           <main className="flex-1 p-6 md:p-8 space-y-6">
           
+          {/* Quick Onboarding Success Guide for Customer Experience */}
+          <QuickOnboardingGuide
+            posts={clientPosts}
+            activeClient={userClients.find(c => c.id === activeClientId)}
+            onOpenBrandKit={() => setIsBrandKitModalOpen(true)}
+            onOpenNewPost={handleOpenCreateDialog}
+            onOpenApprovalLink={() => setIsShareApprovalModalOpen(true)}
+          />
+
+          {/* Quick Status KPI Chips & 1-Click Operational Filters */}
+          <QuickStatusCounters
+            posts={clientPosts}
+            selectedStatusFilter={statusFilter}
+            onSelectStatusFilter={(newStatus) => setStatusFilter(newStatus)}
+            onSwitchView={(v) => setActiveView(v)}
+          />
+
           {/* Discrete Free Plan Contact Warning Banner */}
           {!currentUser.isTeamMember && (!currentUser.plan || currentUser.plan === 'free') && (
             <div className="p-3.5 rounded-xl bg-accent-purple/10 border border-accent-purple/20 flex flex-col sm:flex-row items-center justify-between gap-3 text-left animate-fade-in">
@@ -1529,7 +1559,29 @@ export default function App() {
           }}
         />
 
+        {/* Coming Soon Feature Modal */}
+        <ComingSoonModal
+          isOpen={comingSoonFeature !== null}
+          onClose={() => setComingSoonFeature(null)}
+          featureType={comingSoonFeature || 'general'}
+        />
 
+        {/* Client Share Approval Link Modal */}
+        <ShareApprovalModal
+          isOpen={isShareApprovalModalOpen}
+          onClose={() => setIsShareApprovalModalOpen(false)}
+          posts={clientPosts}
+          client={userClients.find(c => c.id === activeClientId)}
+        />
+
+        {/* Floating Quick Action Speed Dial Button */}
+        <FloatingQuickAction
+          onNewPost={handleOpenCreateDialog}
+          onOpenApprovalLink={() => setIsShareApprovalModalOpen(true)}
+          onOpenBrandKit={() => setIsBrandKitModalOpen(true)}
+          onOpenCampaigns={() => setIsCampaignsModalOpen(true)}
+          onOpenReferenceHub={() => setIsReferenceHubModalOpen(true)}
+        />
 
         {/* 5. FOOTER */}
         <footer className="border-t border-panel-border/80 bg-panel-black py-4 text-center text-[11px] text-zinc-600 font-mono flex-shrink-0">

@@ -79,7 +79,7 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      if ('serviceWorker' in navigator && window.location.protocol === 'https:' && !window.location.hostname.includes('localhost')) {
+      if ('serviceWorker' in navigator && window.location.protocol === 'https:' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('run.app')) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/service-worker.js').catch(function(err) {
             console.warn('SW registration bypassed:', err);

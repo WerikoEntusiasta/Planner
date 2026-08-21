@@ -8,10 +8,10 @@ import { Platform, ContentFormat, FunnelStage, Client, User } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import LanguageSelector from './LanguageSelector';
 import { 
-  Calendar, Grid, Layers, Plus, Sparkles, ChevronDown, UserPlus, LogOut, 
+  Calendar, Grid, Layers, Plus, Sparkles, ChevronDown, ChevronRight, UserPlus, LogOut, 
   Users, Edit3, LifeBuoy, Shield, BarChart2, Palette, Hash, Rocket, 
   Bookmark, Workflow, Menu, X, CheckCircle2, Target, TrendingUp,
-  Image as ImageIcon
+  Image as ImageIcon, Wrench
 } from 'lucide-react';
 
 interface AppNavigationSidebarProps {
@@ -84,6 +84,8 @@ export default function AppNavigationSidebar({
   const { t } = useLanguage();
   const [isClientDropdownOpen, setIsClientDropdownOpen] = useState(false);
   const [newClientName, setNewClientName] = useState('');
+  const [isToolsHovered, setIsToolsHovered] = useState(false);
+  const [isToolsPinned, setIsToolsPinned] = useState(false);
   const clientDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -116,12 +118,26 @@ export default function AppNavigationSidebar({
   ];
 
   const toolItems = [
-    { id: 'carousel_ai', label: 'Criador de Carrossel IA', icon: Sparkles, color: 'text-accent-purple', action: onOpenCarouselAIModal },
+    { 
+      id: 'carousel_ai', 
+      label: 'Criador de Carrossel IA', 
+      icon: Sparkles, 
+      color: 'text-accent-purple', 
+      action: onOpenCarouselAIModal,
+      isComingSoon: true 
+    },
     { id: 'brandkit', label: 'Kit de Marca', icon: Palette, color: 'text-accent-blue', action: onOpenBrandKitModal },
     { id: 'campaigns', label: 'Campanhas Multicanal', icon: Rocket, color: 'text-accent-orange', action: onOpenCampaignsModal },
     { id: 'reference', label: 'Central de Inspirações', icon: Bookmark, color: 'text-accent-purple', action: onOpenReferenceHubModal },
     { id: 'hashtags', label: 'Biblioteca Hashtags', icon: Hash, color: 'text-accent-purple', action: onOpenHashtagLibraryModal },
-    { id: 'integrations', label: t('integrations', 'Integrações'), icon: Workflow, color: 'text-accent-purple', action: onOpenIntegrationsModal },
+    { 
+      id: 'integrations', 
+      label: t('integrations', 'Integrações'), 
+      icon: Workflow, 
+      color: 'text-accent-orange', 
+      action: onOpenIntegrationsModal,
+      isComingSoon: true 
+    },
     { id: 'team', label: currentUser?.isTeamMember ? t('viewTeam', 'Equipa') : t('teamAndPlans', 'Equipa & Planos'), icon: Users, color: 'text-accent-orange', action: onOpenTeamModal },
     { id: 'support', label: t('support', 'Suporte Técnico'), icon: LifeBuoy, color: 'text-accent-orange', action: onOpenSupportModal },
     { id: 'privacy', label: t('privacy', 'Privacidade & LGPD'), icon: Shield, color: 'text-emerald-400', action: onOpenLGPDModal },
@@ -291,36 +307,85 @@ export default function AppNavigationSidebar({
           </div>
         </div>
 
-        {/* ADVANCED TOOLS & RESOURCES MENU */}
-        <div>
-          <div className="text-[10px] font-mono uppercase font-bold text-zinc-500 tracking-wider mb-2 px-2">
-            Ferramentas & Recursos
-          </div>
-          <div className="space-y-1">
-            {toolItems.map((tool) => {
-              const Icon = tool.icon;
-              const isCarouselAI = tool.id === 'carousel_ai';
-              const isActive = isCarouselAI && activeView === 'carousel-ai';
-              return (
-                <button
-                  key={tool.id}
-                  onClick={() => {
-                    tool.action?.();
-                    setMobileOpen(false);
-                  }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer text-left ${
-                    isActive
-                      ? 'bg-gradient-to-r from-accent-purple/25 to-accent-orange/15 border border-accent-purple/40 text-white font-bold shadow-md'
-                      : 'text-zinc-400 hover:text-white hover:bg-zinc-950'
-                  }`}
-                >
-                  <Icon size={15} className={tool.color} />
-                  <span>{tool.label}</span>
-                  {isActive && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-purple" />}
-                </button>
-              );
-            })}
-          </div>
+        {/* ADVANCED TOOLS & RESOURCES MENU (HOVER EXPANDABLE) */}
+        <div 
+          className="relative rounded-2xl transition-all"
+          onMouseEnter={() => setIsToolsHovered(true)}
+          onMouseLeave={() => setIsToolsHovered(false)}
+        >
+          {/* Header trigger button with hover & click toggle */}
+          <button
+            type="button"
+            onClick={() => setIsToolsPinned(prev => !prev)}
+            className={`w-full flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer select-none text-left ${
+              isToolsHovered || isToolsPinned || activeView === 'carousel-ai'
+                ? 'bg-zinc-900/90 border-accent-purple/40 text-white shadow-lg'
+                : 'bg-panel-card/50 border-panel-border/60 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className={`p-1.5 rounded-lg border transition-all ${
+                isToolsHovered || isToolsPinned
+                  ? 'bg-accent-purple/20 border-accent-purple/30 text-accent-purple'
+                  : 'bg-zinc-900 border-zinc-800 text-zinc-400'
+              }`}>
+                <Wrench size={13} className="flex-shrink-0" />
+              </div>
+              <div className="truncate">
+                <div className="text-[11px] font-bold text-zinc-200 truncate flex items-center gap-1.5">
+                  <span>Ferramentas & Recursos</span>
+                </div>
+                <div className="text-[9px] font-mono text-zinc-500 flex items-center gap-1">
+                  <span>{toolItems.length} utilitários</span>
+                  <span className="text-zinc-600">•</span>
+                  <span className="text-accent-purple/80">Passe o mouse</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+              <span className={`p-1 rounded-md transition-transform duration-200 ${
+                (isToolsHovered || isToolsPinned || activeView === 'carousel-ai') ? 'rotate-180 text-accent-purple' : 'text-zinc-500'
+              }`}>
+                <ChevronDown size={14} />
+              </span>
+            </div>
+          </button>
+
+          {/* Hover / Expandable Body */}
+          {(isToolsHovered || isToolsPinned || activeView === 'carousel-ai') && (
+            <div className="mt-1.5 p-1.5 rounded-xl bg-zinc-950/90 border border-panel-border/80 shadow-2xl space-y-0.5 animate-fade-in backdrop-blur-md">
+              {toolItems.map((tool) => {
+                const Icon = tool.icon;
+                const isCarouselAI = tool.id === 'carousel_ai';
+                const isActive = isCarouselAI && activeView === 'carousel-ai';
+                const isComingSoon = (tool as any).isComingSoon;
+                return (
+                  <button
+                    key={tool.id}
+                    onClick={() => {
+                      tool.action?.();
+                      setMobileOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer text-left group ${
+                      isActive
+                        ? 'bg-gradient-to-r from-accent-purple/25 to-accent-orange/15 border border-accent-purple/40 text-white font-bold shadow-md'
+                        : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+                    }`}
+                  >
+                    <Icon size={14} className={`${tool.color} flex-shrink-0`} />
+                    <span className="truncate text-[11px]">{tool.label}</span>
+                    {isComingSoon && (
+                      <span className="ml-auto px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase tracking-wider bg-purple-500/15 text-purple-300 border border-purple-500/30 flex-shrink-0">
+                        Em Breve
+                      </span>
+                    )}
+                    {isActive && !isComingSoon && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-purple" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* STATS MINI CARD */}

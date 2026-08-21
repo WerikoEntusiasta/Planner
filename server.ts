@@ -48,23 +48,13 @@ const PORT = Number(process.env.PORT) || 3000;
 // Trust reverse proxies
 app.set('trust proxy', 1);
 
-// Security Headers with safe Content Security Policy
+// Security Headers configured for full iframe preview compatibility
 app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'", "https:", "http:", "ws:", "wss:"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://www.googletagmanager.com", "https://*.google-analytics.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
-      imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
-      connectSrc: ["'self'", "https:", "http:", "wss:", "ws:", "https://*.google-analytics.com", "https://*.analytics.google.com", "https://*.googletagmanager.com"],
-      frameSrc: ["'self'", "https:"],
-      objectSrc: ["'none'"],
-      upgradeInsecureRequests: null,
-    }
-  },
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
-  frameguard: false, // Allows embedding in preview iframe environments
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false,
+  frameguard: false,
 }));
 
 // CORS Policy
