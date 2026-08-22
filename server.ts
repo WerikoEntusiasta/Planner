@@ -2499,7 +2499,7 @@ app.get('/api/auth/facebook/url', async (req, res) => {
   const redirectUri = getFacebookRedirectUri(req);
   
   // Scopes requested for Instagram Publishing & Page management
-  const scope = 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,publish_video';
+  const scope = 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,pages_manage_posts';
   
   // Item 22 Fix: Generate random cryptographic state
   const stateToken = crypto.randomUUID();
