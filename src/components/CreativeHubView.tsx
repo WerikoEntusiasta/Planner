@@ -630,6 +630,7 @@ export default function CreativeHubView({
     if (filterFormat !== 'all' && c.format !== filterFormat) return false;
     if (filterStatus !== 'all' && c.status !== filterStatus) return false;
     
+    if (filterCaptionStatus !== 'all' && c.status === 'rejected') return false;
     if (filterCaptionStatus === 'missing' && Boolean(c.description?.trim())) return false;
     if (filterCaptionStatus === 'has_caption' && !c.description?.trim()) return false;
     if (filterCaptionStatus === 'pending_approval' && (!c.description?.trim() || (c.captionStatus && c.captionStatus !== 'pending_approval' && c.captionStatus !== 'draft'))) return false;
@@ -651,9 +652,10 @@ export default function CreativeHubView({
   const approvedCount = creatives.filter(c => c.status === 'approved').length;
   const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
   
-  const totalWithCaption = creatives.filter(c => Boolean(c.description?.trim())).length;
-  const pendingCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
-  const missingCaptionsCount = creatives.filter(c => !c.description?.trim()).length;
+  const validCaptionCreatives = creatives.filter(c => c.status !== 'rejected');
+  const totalWithCaption = validCaptionCreatives.filter(c => Boolean(c.description?.trim())).length;
+  const pendingCaptionsCount = validCaptionCreatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
+  const missingCaptionsCount = validCaptionCreatives.filter(c => !c.description?.trim()).length;
 
   const currentSelectedClientObj = clients.find(c => c.id === selectedClientId);
 
@@ -984,18 +986,23 @@ export default function CreativeHubView({
                   {/* STATUS BADGE (VISUAL) */}
                   <div className="absolute top-3 right-3">
                     {isPending && (
-                      <span className="px-2.5 py-1 rounded-full bg-[#F97316]/20 border border-[#F97316]/40 text-[#F97316] text-[10px] font-semibold flex items-center gap-1">
+                      <span className="px-2.5 py-1 rounded-full bg-[#F97316]/20 border border-[#F97316]/40 text-[#F97316] text-[10px] font-semibold flex items-center gap-1 shadow-sm">
                         <Clock size={12} /> Visual Pendente
                       </span>
                     )}
                     {isApproved && (
-                      <span className="px-2.5 py-1 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Visual Aprovado
+                      <span className="px-2.5 py-1 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold flex items-center gap-1 shadow-sm">
+                        <CheckCircle2 size={12} /> Criativo Aprovado
                       </span>
                     )}
                     {isChanges && (
-                      <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-semibold flex items-center gap-1">
+                      <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-semibold flex items-center gap-1 shadow-sm">
                         <Clock size={12} /> Ajustes no Visual
+                      </span>
+                    )}
+                    {creative.status === 'rejected' && (
+                      <span className="px-2.5 py-1 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-semibold flex items-center gap-1 shadow-sm">
+                        <X size={12} /> Criativo Reprovado
                       </span>
                     )}
                   </div>

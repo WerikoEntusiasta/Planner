@@ -330,9 +330,9 @@ export default function ClientCreativeApprovalPage({
     }
   };
 
-  // Handle Batch Approve All Pending Captions
+  // Handle Batch Approve All Pending Captions (excluding rejected creatives)
   const handleBatchApproveCaptions = async () => {
-    const pendingCaptionList = creatives.filter(c => c.description && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft'));
+    const pendingCaptionList = creatives.filter(c => c.status !== 'rejected' && c.description && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft'));
     if (pendingCaptionList.length === 0) {
       showToast('Nenhuma legenda pendente de aprovação.', 'info');
       return;
@@ -465,15 +465,20 @@ export default function ClientCreativeApprovalPage({
 
   // Cycle to previous / next creative in inspector
   const handleCycleCreative = (direction: 'next' | 'prev') => {
-    if (!activeCreative || creatives.length <= 1) return;
-    const currentIndex = creatives.findIndex(c => c.id === activeCreative.id);
-    if (currentIndex === -1) return;
+    // When focusing on captions, skip rejected creatives
+    const list = approvalFocus === 'caption' ? creatives.filter(c => c.status !== 'rejected') : creatives;
+    if (!activeCreative || list.length <= 1) return;
+    const currentIndex = list.findIndex(c => c.id === activeCreative.id);
+    if (currentIndex === -1) {
+      if (list.length > 0) setActiveCreative(list[0]);
+      return;
+    }
 
     let nextIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
-    if (nextIndex >= creatives.length) nextIndex = 0;
-    if (nextIndex < 0) nextIndex = creatives.length - 1;
+    if (nextIndex >= list.length) nextIndex = 0;
+    if (nextIndex < 0) nextIndex = list.length - 1;
 
-    setActiveCreative(creatives[nextIndex]);
+    setActiveCreative(list[nextIndex]);
   };
 
   // Quick preset feedback pills
@@ -561,17 +566,22 @@ export default function ClientCreativeApprovalPage({
   const pendingCount = creatives.filter(c => c.status === 'pending_approval' || c.status === 'draft').length;
   const approvedCount = creatives.filter(c => c.status === 'approved').length;
   const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
+  const rejectedCount = creatives.filter(c => c.status === 'rejected').length;
 
-  // Caption stats
-  const totalCaptionsWithText = creatives.filter(c => Boolean(c.description?.trim())).length;
-  const pendingCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
-  const approvedCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && c.captionStatus === 'approved').length;
-  const changesCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && c.captionStatus === 'changes_requested').length;
-  const missingCaptionsCount = creatives.filter(c => !c.description?.trim()).length;
+  // Caption stats (Creatives with status 'rejected' are strictly excluded from caption approval)
+  const validCaptionCreatives = creatives.filter(c => c.status !== 'rejected');
+  const totalCaptionsWithText = validCaptionCreatives.filter(c => Boolean(c.description?.trim())).length;
+  const pendingCaptionsCount = validCaptionCreatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
+  const approvedCaptionsCount = validCaptionCreatives.filter(c => Boolean(c.description?.trim()) && c.captionStatus === 'approved').length;
+  const changesCaptionsCount = validCaptionCreatives.filter(c => Boolean(c.description?.trim()) && c.captionStatus === 'changes_requested').length;
+  const missingCaptionsCount = validCaptionCreatives.filter(c => !c.description?.trim()).length;
 
   // Filter creatives for the hub view
   const filteredHubCreatives = creatives.filter(c => {
     if (approvalFocus === 'caption') {
+      // Reproved/rejected creatives must NOT appear for caption approval
+      if (c.status === 'rejected') return false;
+
       if (hubCaptionFilter === 'missing') return !c.description?.trim();
       if (hubCaptionFilter === 'pending_approval') return Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft');
       if (hubCaptionFilter === 'approved') return Boolean(c.description?.trim()) && c.captionStatus === 'approved';
@@ -1042,38 +1052,47 @@ export default function ClientCreativeApprovalPage({
                         )}
                       </div>
 
-                      {/* STATUS BADGE */}
-                      <div className="absolute top-3 right-3">
-                        {approvalFocus === 'caption' ? (
+                      {/* STATUS BADGES */}
+                      <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5 z-10">
+                        {/* 1. VISUAL STATUS BADGE (EXPLICITLY SHOWING CRIATIVO APROVADO) */}
+                        {isApproved && (
+                          <span className="px-2.5 py-1 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg backdrop-blur-sm">
+                            <CheckCircle2 size={12} /> Criativo Aprovado
+                          </span>
+                        )}
+                        {isPending && (
+                          <span className="px-2.5 py-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
+                            <Clock size={12} /> Criativo Pendente
+                          </span>
+                        )}
+                        {isChanges && (
+                          <span className="px-2.5 py-1 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                            <MessageSquare size={12} /> Ajuste no Visual
+                          </span>
+                        )}
+                        {creative.status === 'rejected' && (
+                          <span className="px-2.5 py-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                            <X size={12} /> Criativo Reprovado
+                          </span>
+                        )}
+
+                        {/* 2. CAPTION STATUS BADGE (WHEN VIEWING IN CAPTION MODE) */}
+                        {approvalFocus === 'caption' && (
                           !hasCaption ? (
-                            <span className="px-2.5 py-1 rounded-full bg-zinc-800/90 border border-zinc-700 text-zinc-400 text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                            <span className="px-2.5 py-0.5 rounded-full bg-zinc-900/90 border border-zinc-700 text-zinc-400 text-[10px] font-bold flex items-center gap-1 shadow-lg">
                               Sem Legenda
                             </span>
                           ) : isCaptionPending ? (
-                            <span className="px-2.5 py-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
-                              <Clock size={12} /> Legenda Pendente
+                            <span className="px-2.5 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
+                              <Clock size={11} /> Legenda Pendente
                             </span>
                           ) : isCaptionApproved ? (
-                            <span className="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
-                              <CheckCircle2 size={12} /> Legenda Aprovada
+                            <span className="px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              <CheckCircle2 size={11} /> Legenda Aprovada
                             </span>
                           ) : (
-                            <span className="px-2.5 py-1 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
-                              <MessageSquare size={12} /> Ajuste na Legenda
-                            </span>
-                          )
-                        ) : (
-                          isPending ? (
-                            <span className="px-2.5 py-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
-                              <Clock size={12} /> Aguardando Aprovação
-                            </span>
-                          ) : isApproved ? (
-                            <span className="px-2.5 py-1 rounded-full bg-blue-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
-                              <CheckCircle2 size={12} /> Aprovado
-                            </span>
-                          ) : (
-                            <span className="px-2.5 py-1 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
-                              <MessageSquare size={12} /> Ajustes
+                            <span className="px-2.5 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              <MessageSquare size={11} /> Ajuste na Legenda
                             </span>
                           )
                         )}
@@ -1101,6 +1120,14 @@ export default function ClientCreativeApprovalPage({
                         >
                           {creative.title}
                         </h3>
+
+                        {/* STATUS DO CRIATIVO VISUAL (QUANDO APROVADO) */}
+                        {isApproved && (
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 text-[11px] font-bold">
+                            <CheckCircle2 size={13} className="text-blue-400 shrink-0" />
+                            <span>Status: Criativo Aprovado</span>
+                          </div>
+                        )}
 
                         {/* CAPTION BLOCK */}
                         {hasCaption ? (
@@ -1448,25 +1475,30 @@ export default function ClientCreativeApprovalPage({
             {/* CREATIVE TITLE & DETAILS CARD */}
             <div className="bg-[#14141c] border border-zinc-800 rounded-3xl p-6 shadow-xl space-y-5">
               
-              {/* STATUS INDICATOR (ORANGE FOR PENDING, BLUE FOR APPROVED) */}
+              {/* STATUS INDICATOR (ORANGE FOR PENDING, BLUE FOR APPROVED, RED FOR REJECTED) */}
               <div className="flex items-center justify-between">
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-[10px] font-mono font-bold text-purple-400 uppercase tracking-wider">
                   <Instagram size={12} /> {activeCreative.platform?.toUpperCase() || 'INSTAGRAM'} • {activeCreative.format?.toUpperCase() || 'CARROSSEL'}
                 </div>
 
                 {activeCreative.status === 'approved' && (
-                  <span className="px-3 py-1 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center gap-1 shadow-md">
-                    <CheckCircle2 size={13} /> Visual Aprovado
+                  <span className="px-3 py-1 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center gap-1 shadow-md">
+                    <CheckCircle2 size={13} /> Criativo Aprovado
                   </span>
                 )}
                 {(activeCreative.status === 'pending_approval' || activeCreative.status === 'draft') && (
                   <span className="px-3 py-1 rounded-full bg-orange-500 text-white text-xs font-bold flex items-center gap-1 shadow-md animate-pulse">
-                    <Clock size={13} /> Visual Pendente
+                    <Clock size={13} /> Criativo Pendente
                   </span>
                 )}
                 {activeCreative.status === 'changes_requested' && (
                   <span className="px-3 py-1 rounded-full bg-amber-500 text-black text-xs font-bold flex items-center gap-1 shadow-md">
                     <MessageSquare size={13} /> Ajuste Solicitado
+                  </span>
+                )}
+                {activeCreative.status === 'rejected' && (
+                  <span className="px-3 py-1 rounded-full bg-red-600 text-white text-xs font-bold flex items-center gap-1 shadow-md">
+                    <X size={13} /> Criativo Reprovado
                   </span>
                 )}
               </div>
@@ -1476,6 +1508,20 @@ export default function ClientCreativeApprovalPage({
                   {activeCreative.title}
                 </h2>
               </div>
+
+              {/* VISUAL APPROVAL STATUS BANNER */}
+              {activeCreative.status === 'approved' && (
+                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-2xl flex items-center gap-2 text-xs text-blue-200 font-semibold">
+                  <CheckCircle2 size={16} className="text-blue-400 shrink-0" />
+                  <span>Status da Arte Visual: <strong className="text-blue-300">Criativo Aprovado</strong></span>
+                </div>
+              )}
+              {activeCreative.status === 'rejected' && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-2xl flex items-center gap-2 text-xs text-red-200 font-semibold">
+                  <AlertCircle size={16} className="text-red-400 shrink-0" />
+                  <span>Este criativo visual foi <strong>Reprovado</strong>. A aprovação de legenda fica desabilitada.</span>
+                </div>
+              )}
 
               {/* LEGENDA / TEXTO DA PUBLICAÇÃO WITH COPY AND CAPTION APPROVAL */}
               <div className="space-y-2 pt-2 border-t border-zinc-800">
@@ -1515,35 +1561,37 @@ export default function ClientCreativeApprovalPage({
                       {activeCreative.description}
                     </div>
 
-                    {/* CAPTION DIRECT APPROVAL / ADJUSTMENT BUTTONS */}
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleApproveCaption(activeCreative)}
-                        disabled={isSubmitting || activeCreative.captionStatus === 'approved'}
-                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
-                          activeCreative.captionStatus === 'approved'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/20'
-                        }`}
-                      >
-                        <Check size={14} strokeWidth={2.5} />
-                        <span>{activeCreative.captionStatus === 'approved' ? 'Legenda Já Aprovada' : 'Aprovar Esta Legenda'}</span>
-                      </button>
+                    {/* CAPTION DIRECT APPROVAL / ADJUSTMENT BUTTONS (DISABLED IF CREATIVE IS REJECTED) */}
+                    {activeCreative.status !== 'rejected' ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleApproveCaption(activeCreative)}
+                          disabled={isSubmitting || activeCreative.captionStatus === 'approved'}
+                          className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                            activeCreative.captionStatus === 'approved'
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/20'
+                          }`}
+                        >
+                          <Check size={14} strokeWidth={2.5} />
+                          <span>{activeCreative.captionStatus === 'approved' ? 'Legenda Já Aprovada' : 'Aprovar Esta Legenda'}</span>
+                        </button>
 
-                      <button
-                        onClick={() => {
-                          setTargetFeedbackCreative(activeCreative);
-                          setFeedbackTargetType('caption');
-                          setFeedbackType('changes');
-                          setShowFeedbackModal(true);
-                        }}
-                        disabled={isSubmitting}
-                        className="px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-amber-500/40 text-amber-400 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                      >
-                        <Edit3 size={13} />
-                        <span>Ajustar Legenda</span>
-                      </button>
-                    </div>
+                        <button
+                          onClick={() => {
+                            setTargetFeedbackCreative(activeCreative);
+                            setFeedbackTargetType('caption');
+                            setFeedbackType('changes');
+                            setShowFeedbackModal(true);
+                          }}
+                          disabled={isSubmitting}
+                          className="px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-amber-500/40 text-amber-400 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                        >
+                          <Edit3 size={13} />
+                          <span>Ajustar Legenda</span>
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="p-4 bg-zinc-950/50 border border-dashed border-zinc-800 rounded-2xl text-xs text-zinc-500 flex items-center gap-2">
