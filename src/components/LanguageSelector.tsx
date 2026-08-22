@@ -56,7 +56,7 @@ export default function LanguageSelector({ variant = 'compact', className = '' }
         title={t('selectLanguage', 'Alterar Idioma / Switch Language')}
       >
         <span className="text-sm">{currentLanguageOption.flag}</span>
-        <span className={`${variant === 'compact' ? 'hidden sm:inline' : 'inline'}`}>
+        <span className={`${variant === 'compact' || variant === 'landing' ? 'hidden sm:inline' : 'inline'}`}>
           {currentLanguageOption.nativeName}
         </span>
         {isAutoDetected && (
