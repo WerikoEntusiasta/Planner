@@ -1,18 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Creative, CreativeAsset } from '../types';
+import { Creative, CreativeAsset, CreativeStatus } from '../types';
 import { 
   Check, X, MessageSquare, Send, Sparkles, AlertCircle, 
   ChevronLeft, ChevronRight, Eye, Smartphone, Instagram, 
   Film, Image as ImageIcon, CheckCircle2, Clock, ThumbsUp, 
   Share2, Maximize2, Shield, RefreshCw, Layers, ArrowLeft,
-  CheckCheck, Filter, ThumbsDown, HelpCircle, ExternalLink
+  CheckCheck, Filter, ThumbsDown, HelpCircle, ExternalLink,
+  FileText, Copy, AlignLeft, Hash, Edit3, MessageCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface ClientCreativeApprovalPageProps {
   shareToken?: string;
   clientToken?: string;
   initialMode?: 'single' | 'hub';
+  initialFocus?: 'all' | 'visual' | 'caption';
   onBackToApp?: () => void;
 }
 
@@ -20,8 +23,19 @@ export default function ClientCreativeApprovalPage({
   shareToken, 
   clientToken, 
   initialMode = 'single',
+  initialFocus = 'all',
   onBackToApp 
 }: ClientCreativeApprovalPageProps) {
+  // Check URL query param for focus
+  const urlFocus = new URLSearchParams(window.location.search).get('focus') || 
+                   new URLSearchParams(window.location.search).get('type') || 
+                   (window.location.pathname.includes('/aprovar-legenda') ? 'caption' : initialFocus);
+
+  // Focus: 'all' | 'visual' | 'caption'
+  const [approvalFocus, setApprovalFocus] = useState<'all' | 'visual' | 'caption'>(
+    urlFocus === 'caption' ? 'caption' : (urlFocus === 'visual' ? 'visual' : 'all')
+  );
+
   // Mode: 'single' (focused on 1 creative) or 'hub' (all creatives gallery for the brand)
   const [viewMode, setViewMode] = useState<'single' | 'hub'>(
     clientToken || initialMode === 'hub' || (!shareToken && clientToken) ? 'hub' : 'single'
@@ -35,18 +49,23 @@ export default function ClientCreativeApprovalPage({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Hub filter state
+  // Hub filter states
   const [hubStatusFilter, setHubStatusFilter] = useState<'all' | 'pending_approval' | 'approved' | 'changes_requested'>('pending_approval');
+  const [hubCaptionFilter, setHubCaptionFilter] = useState<'all' | 'pending_approval' | 'approved' | 'changes_requested' | 'missing'>('all');
 
   // Carousel & media viewer state for inspector
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [mockupMode, setMockupMode] = useState<'feed' | 'clean'>('feed');
+  
+  // Feedback modal states
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [targetFeedbackCreative, setTargetFeedbackCreative] = useState<Creative | null>(null);
+  const [feedbackTargetType, setFeedbackTargetType] = useState<'all' | 'caption'>('all');
   const [feedbackType, setFeedbackType] = useState<'changes' | 'reject'>('changes');
   const [feedbackText, setFeedbackText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'warning' } | null>(null);
+  const [copiedCaptionId, setCopiedCaptionId] = useState<string | null>(null);
 
   // Notification helper
   const showToast = (text: string, type: 'success' | 'info' | 'warning' = 'success') => {
@@ -181,7 +200,18 @@ export default function ClientCreativeApprovalPage({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeCreative, viewMode]);
 
-  // Handle single creative approval
+  // Copy caption text helper
+  const handleCopyCaptionText = async (text?: string, creativeId?: string) => {
+    if (!text) return;
+    const success = await copyToClipboard(text);
+    if (success) {
+      setCopiedCaptionId(creativeId || 'active');
+      showToast('Texto da legenda copiado com sucesso! 📋', 'success');
+      setTimeout(() => setCopiedCaptionId(null), 2500);
+    }
+  };
+
+  // Handle single creative visual approval
   const handleApproveCreative = async (creativeToApprove: Creative) => {
     setIsSubmitting(true);
     const token = creativeToApprove.shareToken || creativeToApprove.id;
@@ -199,7 +229,8 @@ export default function ClientCreativeApprovalPage({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           status: 'approved',
-          feedback: 'Aprovado pelo cliente.'
+          targetType: 'all',
+          feedback: 'Visual do criativo aprovado pelo cliente.'
         })
       });
 
@@ -211,18 +242,55 @@ export default function ClientCreativeApprovalPage({
       showToast(`Criativo "${creativeToApprove.title}" APROVADO com sucesso! 🚀`, 'success');
     } catch (err) {
       console.error('Failed to submit approval:', err);
-      showToast(`Criativo aprovado (modo offline)`, 'success');
+      showToast(`Criativo aprovado!`, 'success');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle Batch Approve All Pending Creatives
+  // Handle single caption approval
+  const handleApproveCaption = async (creativeToApprove: Creative) => {
+    setIsSubmitting(true);
+    const token = creativeToApprove.shareToken || creativeToApprove.id;
+    const formattedDate = new Date().toLocaleDateString('pt-BR');
+
+    // Optimistic UI update
+    setCreatives(prev => prev.map(c => c.id === creativeToApprove.id ? { ...c, captionStatus: 'approved', captionApprovalDate: formattedDate } : c));
+    if (activeCreative?.id === creativeToApprove.id) {
+      setActiveCreative(prev => prev ? { ...prev, captionStatus: 'approved', captionApprovalDate: formattedDate } : null);
+    }
+
+    try {
+      await fetch(`/api/creatives/public/${encodeURIComponent(token)}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'approved',
+          targetType: 'caption',
+          feedback: 'Legenda e texto aprovados pelo cliente.'
+        })
+      });
+
+      // Update local storage backup
+      const localCreatives: Creative[] = JSON.parse(localStorage.getItem('creator_planner_creatives') || '[]');
+      const updated = localCreatives.map(c => (c.shareToken === token || c.id === creativeToApprove.id) ? { ...c, captionStatus: 'approved' as const, captionApprovalDate: formattedDate } : c);
+      localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+
+      showToast(`Legenda de "${creativeToApprove.title}" APROVADA com sucesso! ✍️✨`, 'success');
+    } catch (err) {
+      console.error('Failed to submit caption approval:', err);
+      showToast(`Legenda aprovada!`, 'success');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle Batch Approve All Pending Creatives (Visuals)
   const handleBatchApprovePending = async () => {
     const pendingList = creatives.filter(c => c.status === 'pending_approval' || c.status === 'draft');
     if (pendingList.length === 0) return;
 
-    if (!confirm(`Deseja aprovar todos os ${pendingList.length} criativos pendentes de uma só vez?`)) {
+    if (!confirm(`Deseja aprovar os ${pendingList.length} criativos pendentes de uma só vez?`)) {
       return;
     }
 
@@ -243,6 +311,7 @@ export default function ClientCreativeApprovalPage({
         body: JSON.stringify({
           creativeIds: pendingIds,
           status: 'approved',
+          targetType: 'all',
           feedback: 'Aprovado em lote pelo cliente.'
         })
       });
@@ -261,18 +330,94 @@ export default function ClientCreativeApprovalPage({
     }
   };
 
-  // Handle submit detailed feedback (changes requested or reject)
+  // Handle Batch Approve All Pending Captions
+  const handleBatchApproveCaptions = async () => {
+    const pendingCaptionList = creatives.filter(c => c.description && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft'));
+    if (pendingCaptionList.length === 0) {
+      showToast('Nenhuma legenda pendente de aprovação.', 'info');
+      return;
+    }
+
+    if (!confirm(`Deseja aprovar todas as ${pendingCaptionList.length} legendas pendentes de uma só vez?`)) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    const formattedDate = new Date().toLocaleDateString('pt-BR');
+    const pendingIds = pendingCaptionList.map(c => c.id);
+
+    // Optimistic update
+    setCreatives(prev => prev.map(c => pendingIds.includes(c.id) ? { ...c, captionStatus: 'approved', captionApprovalDate: formattedDate } : c));
+    if (activeCreative && pendingIds.includes(activeCreative.id)) {
+      setActiveCreative(prev => prev ? { ...prev, captionStatus: 'approved', captionApprovalDate: formattedDate } : null);
+    }
+
+    try {
+      await fetch('/api/creatives/public-hub/batch-feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          creativeIds: pendingIds,
+          status: 'approved',
+          targetType: 'caption',
+          feedback: 'Legendas aprovadas em lote pelo cliente.'
+        })
+      });
+
+      // Update local storage
+      const localCreatives: Creative[] = JSON.parse(localStorage.getItem('creator_planner_creatives') || '[]');
+      const updated = localCreatives.map(c => pendingIds.includes(c.id) ? { ...c, captionStatus: 'approved' as const, captionApprovalDate: formattedDate } : c);
+      localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+
+      showToast(`✍️ Todas as ${pendingCaptionList.length} legendas foram aprovadas com sucesso!`, 'success');
+    } catch (err) {
+      console.error('Failed batch caption approval:', err);
+      showToast(`Legendas aprovadas com sucesso!`, 'success');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handle submit feedback (changes requested or reject)
   const handleSendFeedback = async () => {
     if (!targetFeedbackCreative || !feedbackText.trim()) return;
     setIsSubmitting(true);
     const targetStatus = feedbackType === 'changes' ? 'changes_requested' : 'rejected';
     const token = targetFeedbackCreative.shareToken || targetFeedbackCreative.id;
     const formattedDate = new Date().toLocaleDateString('pt-BR');
+    const isCaptionTarget = feedbackTargetType === 'caption';
 
     // Optimistic update
-    setCreatives(prev => prev.map(c => c.id === targetFeedbackCreative.id ? { ...c, status: targetStatus, clientFeedback: feedbackText.trim(), approvalDate: formattedDate } : c));
-    if (activeCreative?.id === targetFeedbackCreative.id) {
-      setActiveCreative(prev => prev ? { ...prev, status: targetStatus, clientFeedback: feedbackText.trim(), approvalDate: formattedDate } : null);
+    if (isCaptionTarget) {
+      setCreatives(prev => prev.map(c => c.id === targetFeedbackCreative.id ? { 
+        ...c, 
+        captionStatus: targetStatus, 
+        captionFeedback: feedbackText.trim(), 
+        captionApprovalDate: formattedDate 
+      } : c));
+      if (activeCreative?.id === targetFeedbackCreative.id) {
+        setActiveCreative(prev => prev ? { 
+          ...prev, 
+          captionStatus: targetStatus, 
+          captionFeedback: feedbackText.trim(), 
+          captionApprovalDate: formattedDate 
+        } : null);
+      }
+    } else {
+      setCreatives(prev => prev.map(c => c.id === targetFeedbackCreative.id ? { 
+        ...c, 
+        status: targetStatus, 
+        clientFeedback: feedbackText.trim(), 
+        approvalDate: formattedDate 
+      } : c));
+      if (activeCreative?.id === targetFeedbackCreative.id) {
+        setActiveCreative(prev => prev ? { 
+          ...prev, 
+          status: targetStatus, 
+          clientFeedback: feedbackText.trim(), 
+          approvalDate: formattedDate 
+        } : null);
+      }
     }
 
     try {
@@ -281,18 +426,27 @@ export default function ClientCreativeApprovalPage({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           status: targetStatus,
+          targetType: isCaptionTarget ? 'caption' : 'all',
           feedback: feedbackText.trim()
         })
       });
 
       // Update local storage
       const localCreatives: Creative[] = JSON.parse(localStorage.getItem('creator_planner_creatives') || '[]');
-      const updated = localCreatives.map(c => (c.shareToken === token || c.id === targetFeedbackCreative.id) ? { ...c, status: targetStatus, clientFeedback: feedbackText.trim(), approvalDate: formattedDate } : c);
+      const updated = localCreatives.map(c => {
+        if (c.shareToken === token || c.id === targetFeedbackCreative.id) {
+          if (isCaptionTarget) {
+            return { ...c, captionStatus: targetStatus, captionFeedback: feedbackText.trim(), captionApprovalDate: formattedDate };
+          }
+          return { ...c, status: targetStatus, clientFeedback: feedbackText.trim(), approvalDate: formattedDate };
+        }
+        return c;
+      });
       localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
 
       setShowFeedbackModal(false);
       setFeedbackText('');
-      showToast(feedbackType === 'changes' ? 'Solicitação de ajuste enviada à equipe! 📝' : 'Feedback registrado.', 'info');
+      showToast(feedbackType === 'changes' ? (isCaptionTarget ? 'Ajustes na legenda enviados à equipe! ✍️' : 'Solicitação de ajuste enviada à equipe! 📝') : 'Feedback registrado.', 'info');
     } catch (err) {
       console.error('Failed to submit feedback:', err);
       setShowFeedbackModal(false);
@@ -303,14 +457,13 @@ export default function ClientCreativeApprovalPage({
     }
   };
 
-  // Open inspector for specific creative
+  // Open single creative inspector from the hub
   const handleInspectCreative = (creative: Creative) => {
     setActiveCreative(creative);
-    setCurrentSlideIndex(0);
     setViewMode('single');
   };
 
-  // Cycle to next / prev creative in inspector
+  // Cycle to previous / next creative in inspector
   const handleCycleCreative = (direction: 'next' | 'prev') => {
     if (!activeCreative || creatives.length <= 1) return;
     const currentIndex = creatives.findIndex(c => c.id === activeCreative.id);
@@ -321,102 +474,153 @@ export default function ClientCreativeApprovalPage({
     if (nextIndex < 0) nextIndex = creatives.length - 1;
 
     setActiveCreative(creatives[nextIndex]);
-    setCurrentSlideIndex(0);
   };
 
+  // Quick preset feedback pills
+  const CAPTION_QUICK_SUGGESTIONS = [
+    'Ajustar gancho da 1ª linha',
+    'Trocar chamada para ação (CTA)',
+    'Corrigir ortografia / pontuação',
+    'Deixar tom mais formal',
+    'Deixar tom mais descontraído',
+    'Adicionar mais emojis',
+    'Reduzir tamanho do texto'
+  ];
+
+  const CREATIVE_QUICK_SUGGESTIONS = [
+    'Ajustar cores da marca',
+    'Trocar imagem / foto',
+    'Aumentar contraste do texto',
+    'Corrigir alinhamento',
+    'Inserir logo oficial',
+    'Mudar tipografia'
+  ];
+
+  // ==========================================
+  // LOADING / ERROR STATES
+  // ==========================================
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[#09090b] text-white flex flex-col items-center justify-center p-6 select-none font-sans">
-        <div className="w-12 h-12 border-3 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-4" />
-        <h3 className="text-sm font-semibold text-zinc-300">Carregando Central de Aprovação...</h3>
-        <p className="text-xs text-zinc-500 mt-1">Carregando mídias e roteiros em alta resolução</p>
-      </div>
-    );
-  }
-
-  if (error && creatives.length === 0) {
-    return (
-      <div className="min-h-screen bg-[#09090b] text-white flex flex-col items-center justify-center p-6 text-center select-none font-sans">
-        <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400 mb-4 animate-bounce">
-          <AlertCircle size={30} />
+      <div className="min-h-screen bg-[#09090D] flex flex-col items-center justify-center p-6 text-white font-sans">
+        <div className="relative flex items-center justify-center mb-6">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-blue-600 to-purple-600 animate-spin blur-md opacity-75" />
+          <div className="absolute w-12 h-12 rounded-2xl bg-[#14141C] flex items-center justify-center">
+            <RefreshCw className="animate-spin text-purple-400" size={24} />
+          </div>
         </div>
-        <h2 className="text-xl font-bold font-display">Link de Aprovação Não Encontrado</h2>
-        <p className="text-sm text-zinc-400 mt-2 max-w-md">
-          {error || 'Os criativos solicitados não foram encontrados ou o link expirou. Solicite um novo link ao responsável.'}
+        <h2 className="text-xl font-bold font-display text-zinc-100 tracking-tight">
+          Carregando Portal de Aprovação...
+        </h2>
+        <p className="text-xs text-zinc-400 mt-1 max-w-sm text-center">
+          Preparando a visualização em alta fidelidade dos criativos e legendas da marca {clientName}.
         </p>
-        <div className="flex gap-3 mt-6">
-          <button
-            onClick={loadData}
-            className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-700 text-xs font-semibold hover:bg-zinc-800 transition-all flex items-center gap-2 cursor-pointer"
-          >
-            <RefreshCw size={13} />
-            Tentar Novamente
-          </button>
-          {onBackToApp && (
+      </div>
+    );
+  }
+
+  if (error || !activeCreative) {
+    return (
+      <div className="min-h-screen bg-[#09090D] flex flex-col items-center justify-center p-6 text-white font-sans">
+        <div className="max-w-md w-full bg-[#14141C] border border-zinc-800 rounded-3xl p-8 text-center space-y-4 shadow-2xl">
+          <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mx-auto">
+            <AlertCircle size={28} />
+          </div>
+          <h2 className="text-xl font-bold font-display text-white">Central Não Encontrada</h2>
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            {error || 'O link de aprovação pode ter expirado ou o criativo foi arquivado pelo criador.'}
+          </p>
+          <div className="pt-2 flex flex-col gap-2">
             <button
-              onClick={onBackToApp}
-              className="px-4 py-2 rounded-xl bg-[#8B5CF6] hover:bg-[#7C3AED] text-xs font-semibold text-white transition-all cursor-pointer shadow-sm"
+              onClick={() => window.location.reload()}
+              className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all cursor-pointer"
             >
-              Voltar ao Aplicativo
+              Tentar Novamente
             </button>
-          )}
+            {onBackToApp && (
+              <button
+                onClick={onBackToApp}
+                className="w-full py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-400 hover:text-white transition-all cursor-pointer"
+              >
+                Voltar ao App
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-  // Filtered creatives list for the Hub gallery
+  // Active creative helpers
+  const activeAssets = activeCreative.assets || [];
+  const activeSlide = activeAssets[currentSlideIndex] || activeAssets[0];
+  const isCarousel = activeCreative.format === 'carousel' || activeAssets.length > 1;
+  const isVideo = activeCreative.format === 'video' || activeSlide?.type === 'video';
+
+  // Stats for hub
+  const totalCount = creatives.length;
+  const pendingCount = creatives.filter(c => c.status === 'pending_approval' || c.status === 'draft').length;
+  const approvedCount = creatives.filter(c => c.status === 'approved').length;
+  const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
+
+  // Caption stats
+  const totalCaptionsWithText = creatives.filter(c => Boolean(c.description?.trim())).length;
+  const pendingCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
+  const approvedCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && c.captionStatus === 'approved').length;
+  const changesCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && c.captionStatus === 'changes_requested').length;
+  const missingCaptionsCount = creatives.filter(c => !c.description?.trim()).length;
+
+  // Filter creatives for the hub view
   const filteredHubCreatives = creatives.filter(c => {
+    if (approvalFocus === 'caption') {
+      if (hubCaptionFilter === 'missing') return !c.description?.trim();
+      if (hubCaptionFilter === 'pending_approval') return Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft');
+      if (hubCaptionFilter === 'approved') return Boolean(c.description?.trim()) && c.captionStatus === 'approved';
+      if (hubCaptionFilter === 'changes_requested') return Boolean(c.description?.trim()) && c.captionStatus === 'changes_requested';
+      return true;
+    }
+
     if (hubStatusFilter === 'all') return true;
     if (hubStatusFilter === 'pending_approval') return c.status === 'pending_approval' || c.status === 'draft';
     return c.status === hubStatusFilter;
   });
 
-  const pendingCount = creatives.filter(c => c.status === 'pending_approval' || c.status === 'draft').length;
-  const approvedCount = creatives.filter(c => c.status === 'approved').length;
-  const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
-  const totalCount = creatives.length;
-
-  const activeAssets = activeCreative?.assets || [];
-  const currentAsset = activeAssets[currentSlideIndex] || activeAssets[0];
-  const isCarousel = activeCreative?.format === 'carousel' || activeAssets.length > 1;
-  const isVideo = activeCreative?.format === 'video' || currentAsset?.type === 'video';
-
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 font-sans flex flex-col selection:bg-purple-600 selection:text-white">
+    <div className="min-h-screen bg-[#09090D] text-zinc-100 font-sans flex flex-col selection:bg-purple-500 selection:text-white">
       
-      {/* TOAST NOTIFICATION POPUP */}
+      {/* TOAST NOTIFICATION */}
       <AnimatePresence>
         {toastMessage && (
           <motion.div
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-2xl shadow-2xl border text-xs font-bold flex items-center gap-2.5 backdrop-blur-md ${
+            className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2.5 backdrop-blur-md border ${
               toastMessage.type === 'success'
-                ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200'
+                ? 'bg-blue-600/90 border-blue-400 text-white'
                 : toastMessage.type === 'info'
-                ? 'bg-blue-950/90 border-blue-500/40 text-blue-200'
-                : 'bg-amber-950/90 border-amber-500/40 text-amber-200'
+                ? 'bg-amber-600/90 border-amber-400 text-white'
+                : 'bg-zinc-900/90 border-zinc-700 text-white'
             }`}
           >
-            <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+            <CheckCircle2 size={16} />
             <span>{toastMessage.text}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* 1. TOP PORTAL HEADER */}
-      <header className="border-b border-zinc-800/80 bg-[#121217]/95 backdrop-blur-md sticky top-0 z-40 px-4 md:px-8 py-3.5 flex items-center justify-between">
+      {/* 1. TOP CLIENT PORTAL HEADER BAR */}
+      <header className="h-16 px-4 md:px-8 border-b border-zinc-800/80 bg-[#101017]/95 backdrop-blur-md sticky top-0 z-40 flex items-center justify-between gap-4">
+        
+        {/* LEFT BRAND & TITLE */}
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-orange-500 p-0.5 flex items-center justify-center shadow-lg shadow-purple-600/20">
-            <div className="w-full h-full bg-zinc-950 rounded-[10px] flex items-center justify-center">
-              <Sparkles size={16} className="text-purple-400" />
-            </div>
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-blue-500 flex items-center justify-center text-white font-black font-display text-sm shadow-md shadow-purple-600/20">
+            {clientName.charAt(0).toUpperCase()}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-sm font-bold text-white font-display">Portal de Aprovação de Criativos</h1>
+              <h1 className="font-bold text-sm text-white font-display leading-tight">
+                Central de Aprovação
+              </h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-bold uppercase">
                 {clientName}
               </span>
@@ -425,6 +629,48 @@ export default function ClientCreativeApprovalPage({
               Enviado por <span className="text-zinc-200 font-medium">{creatorName}</span>
             </p>
           </div>
+        </div>
+
+        {/* CENTER FOCUS SELECTOR (VISUAL vs CAPTION / COPYWRITING) */}
+        <div className="hidden md:flex items-center bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+          <button
+            onClick={() => setApprovalFocus('all')}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+              approvalFocus === 'all'
+                ? 'bg-purple-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <Eye size={13} />
+            <span>Visão Completa</span>
+          </button>
+
+          <button
+            onClick={() => setApprovalFocus('visual')}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+              approvalFocus === 'visual'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <ImageIcon size={13} />
+            <span>Criativos & Mídias</span>
+          </button>
+
+          <button
+            onClick={() => setApprovalFocus('caption')}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+              approvalFocus === 'caption'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            <AlignLeft size={13} />
+            <span>Legendas & Copy</span>
+            {pendingCaptionsCount > 0 && (
+              <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse" />
+            )}
+          </button>
         </div>
 
         {/* RIGHT HEADER ACTIONS */}
@@ -437,18 +683,31 @@ export default function ClientCreativeApprovalPage({
               title="Ver todos os criativos da marca de uma vez só"
             >
               <Layers size={14} className="text-purple-400" />
-              <span>Ver Todos os Criativos ({creatives.length})</span>
+              <span>Ver Todos ({creatives.length})</span>
             </button>
           ) : (
-            pendingCount > 0 && (
-              <button
-                onClick={handleBatchApprovePending}
-                disabled={isSubmitting}
-                className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
-              >
-                <CheckCheck size={14} />
-                <span>Aprovar Todos os Pendentes ({pendingCount})</span>
-              </button>
+            approvalFocus === 'caption' ? (
+              pendingCaptionsCount > 0 && (
+                <button
+                  onClick={handleBatchApproveCaptions}
+                  disabled={isSubmitting}
+                  className="px-4 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                >
+                  <CheckCheck size={14} />
+                  <span>Aprovar Todas as Legendas ({pendingCaptionsCount})</span>
+                </button>
+              )
+            ) : (
+              pendingCount > 0 && (
+                <button
+                  onClick={handleBatchApprovePending}
+                  disabled={isSubmitting}
+                  className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                >
+                  <CheckCheck size={14} />
+                  <span>Aprovar Todos ({pendingCount})</span>
+                </button>
+              )
             )
           )}
 
@@ -462,6 +721,29 @@ export default function ClientCreativeApprovalPage({
           )}
         </div>
       </header>
+
+      {/* MOBILE FOCUS SELECTOR */}
+      <div className="flex md:hidden items-center justify-around bg-[#101017] p-2 border-b border-zinc-800 text-xs">
+        <button
+          onClick={() => setApprovalFocus('all')}
+          className={`px-3 py-1 rounded-lg font-semibold transition-all ${approvalFocus === 'all' ? 'bg-purple-600 text-white' : 'text-zinc-400'}`}
+        >
+          Geral
+        </button>
+        <button
+          onClick={() => setApprovalFocus('visual')}
+          className={`px-3 py-1 rounded-lg font-semibold transition-all ${approvalFocus === 'visual' ? 'bg-blue-600 text-white' : 'text-zinc-400'}`}
+        >
+          Mídias
+        </button>
+        <button
+          onClick={() => setApprovalFocus('caption')}
+          className={`px-3 py-1 rounded-lg font-semibold transition-all flex items-center gap-1 ${approvalFocus === 'caption' ? 'bg-amber-600 text-white' : 'text-zinc-400'}`}
+        >
+          <span>Legendas</span>
+          {pendingCaptionsCount > 0 && <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />}
+        </button>
+      </div>
 
       {/* ========================================================================= */}
       {/* 2. MODE A: GENERAL CREATIVE HUB GALLERY (LINK GERAL PARA APROVAR TODOS)   */}
@@ -477,103 +759,186 @@ export default function ClientCreativeApprovalPage({
               <div className="space-y-2 max-w-xl">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-mono font-bold uppercase tracking-wider">
                   <Layers size={14} className="text-purple-400" />
-                  <span>Central Geral de Aprovação</span>
+                  <span>
+                    {approvalFocus === 'caption' 
+                      ? 'Central de Aprovação de Legendas & Copy' 
+                      : 'Central Geral de Aprovação de Criativos'}
+                  </span>
                 </div>
                 <h2 className="text-2xl md:text-3xl font-display font-black text-white tracking-tight">
-                  Criativos da Marca {clientName}
+                  {approvalFocus === 'caption' ? `Legendas da Marca ${clientName}` : `Criativos da Marca ${clientName}`}
                 </h2>
                 <p className="text-xs md:text-sm text-zinc-400 leading-relaxed">
-                  Revise todos os posts, carrosséis e vídeos abaixo. Você pode aprovar ou solicitar ajustes individualmente em cada item ou aprovar tudo de uma só vez.
+                  {approvalFocus === 'caption'
+                    ? 'Revise os textos, ganchos e chamadas para ação de cada publicação abaixo. Você pode aprovar individualmente cada legenda ou aprovar o lote completo.'
+                    : 'Revise todos os posts, carrosséis, vídeos e legendas abaixo. Você pode aprovar ou solicitar ajustes individualmente em cada item ou aprovar tudo de uma só vez.'}
                 </p>
               </div>
 
               {/* BATCH ACTION BUTTON */}
-              {pendingCount > 0 ? (
-                <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
-                  <button
-                    onClick={handleBatchApprovePending}
-                    disabled={isSubmitting}
-                    className="px-6 py-3.5 rounded-2xl font-display font-bold text-sm bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                  >
-                    <CheckCheck size={18} strokeWidth={2.5} />
-                    <span>Aprovar Todos os Pendentes ({pendingCount})</span>
-                  </button>
-                  <span className="text-[11px] text-orange-400 font-mono font-semibold flex items-center gap-1">
-                    <Clock size={12} className="animate-pulse" /> {pendingCount} criativo(s) aguardando sua decisão
-                  </span>
-                </div>
+              {approvalFocus === 'caption' ? (
+                pendingCaptionsCount > 0 ? (
+                  <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
+                    <button
+                      onClick={handleBatchApproveCaptions}
+                      disabled={isSubmitting}
+                      className="px-6 py-3.5 rounded-2xl font-display font-bold text-sm bg-amber-600 hover:bg-amber-500 text-white shadow-lg transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <CheckCheck size={18} strokeWidth={2.5} />
+                      <span>Aprovar Todas as Legendas ({pendingCaptionsCount})</span>
+                    </button>
+                    <span className="text-[11px] text-orange-400 font-mono font-semibold flex items-center gap-1">
+                      <Clock size={12} className="animate-pulse" /> {pendingCaptionsCount} legenda(s) aguardando sua revisão
+                    </span>
+                  </div>
+                ) : (
+                  <div className="px-5 py-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                    <CheckCircle2 size={18} className="text-emerald-400" />
+                    <span>Todas as legendas adicionadas estão aprovadas!</span>
+                  </div>
+                )
               ) : (
-                <div className="px-5 py-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-bold flex items-center gap-2">
-                  <CheckCircle2 size={18} className="text-blue-400" />
-                  <span>Todos os criativos desta central já estão avaliados!</span>
-                </div>
+                pendingCount > 0 ? (
+                  <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
+                    <button
+                      onClick={handleBatchApprovePending}
+                      disabled={isSubmitting}
+                      className="px-6 py-3.5 rounded-2xl font-display font-bold text-sm bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    >
+                      <CheckCheck size={18} strokeWidth={2.5} />
+                      <span>Aprovar Todos os Pendentes ({pendingCount})</span>
+                    </button>
+                    <span className="text-[11px] text-orange-400 font-mono font-semibold flex items-center gap-1">
+                      <Clock size={12} className="animate-pulse" /> {pendingCount} criativo(s) aguardando sua decisão
+                    </span>
+                  </div>
+                ) : (
+                  <div className="px-5 py-3 rounded-2xl bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-bold flex items-center gap-2">
+                    <CheckCircle2 size={18} className="text-blue-400" />
+                    <span>Todos os criativos desta central já estão avaliados!</span>
+                  </div>
+                )
               )}
             </div>
 
-            {/* STATS TABS (STATUS COLOR CODING: PENDING = ORANGE, APPROVED = BLUE) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-zinc-800/80">
-              
-              {/* PENDING CARD (ORANGE) */}
-              <button
-                onClick={() => setHubStatusFilter('pending_approval')}
-                className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
-                  hubStatusFilter === 'pending_approval'
-                    ? 'bg-orange-500/15 border-orange-500 shadow-lg shadow-orange-500/10'
-                    : 'bg-zinc-900/60 border-zinc-800/80 hover:border-orange-500/40'
-                }`}
-              >
-                <span className="text-[10px] font-mono uppercase font-bold text-orange-400 block mb-0.5 flex items-center gap-1">
-                  <Clock size={11} /> Aguardando Aprovação
-                </span>
-                <div className="text-2xl font-bold font-display text-orange-400">{pendingCount}</div>
-              </button>
+            {/* STATS TABS */}
+            {approvalFocus === 'caption' ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-zinc-800/80">
+                <button
+                  onClick={() => setHubCaptionFilter('pending_approval')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubCaptionFilter === 'pending_approval'
+                      ? 'bg-orange-500/15 border-orange-500 shadow-lg shadow-orange-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-orange-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-orange-400 block mb-0.5 flex items-center gap-1">
+                    <Clock size={11} /> Legendas Pendentes
+                  </span>
+                  <div className="text-2xl font-bold font-display text-orange-400">{pendingCaptionsCount}</div>
+                </button>
 
-              {/* APPROVED CARD (BLUE) */}
-              <button
-                onClick={() => setHubStatusFilter('approved')}
-                className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
-                  hubStatusFilter === 'approved'
-                    ? 'bg-blue-500/15 border-blue-500 shadow-lg shadow-blue-500/10'
-                    : 'bg-zinc-900/60 border-zinc-800/80 hover:border-blue-500/40'
-                }`}
-              >
-                <span className="text-[10px] font-mono uppercase font-bold text-blue-400 block mb-0.5 flex items-center gap-1">
-                  <CheckCircle2 size={11} /> Aprovados
-                </span>
-                <div className="text-2xl font-bold font-display text-blue-400">{approvedCount}</div>
-              </button>
+                <button
+                  onClick={() => setHubCaptionFilter('approved')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubCaptionFilter === 'approved'
+                      ? 'bg-emerald-500/15 border-emerald-500 shadow-lg shadow-emerald-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-emerald-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-emerald-400 block mb-0.5 flex items-center gap-1">
+                    <CheckCircle2 size={11} /> Legendas Aprovadas
+                  </span>
+                  <div className="text-2xl font-bold font-display text-emerald-400">{approvedCaptionsCount}</div>
+                </button>
 
-              {/* CHANGES REQUESTED CARD */}
-              <button
-                onClick={() => setHubStatusFilter('changes_requested')}
-                className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
-                  hubStatusFilter === 'changes_requested'
-                    ? 'bg-amber-500/15 border-amber-500 shadow-lg shadow-amber-500/10'
-                    : 'bg-zinc-900/60 border-zinc-800/80 hover:border-amber-500/40'
-                }`}
-              >
-                <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
-                  <MessageSquare size={11} /> Ajustes Solicitados
-                </span>
-                <div className="text-2xl font-bold font-display text-amber-400">{changesCount}</div>
-              </button>
+                <button
+                  onClick={() => setHubCaptionFilter('changes_requested')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubCaptionFilter === 'changes_requested'
+                      ? 'bg-amber-500/15 border-amber-500 shadow-lg shadow-amber-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-amber-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
+                    <MessageSquare size={11} /> Ajustes em Legendas
+                  </span>
+                  <div className="text-2xl font-bold font-display text-amber-400">{changesCaptionsCount}</div>
+                </button>
 
-              {/* TOTAL ALL CARD */}
-              <button
-                onClick={() => setHubStatusFilter('all')}
-                className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
-                  hubStatusFilter === 'all'
-                    ? 'bg-purple-500/15 border-purple-500 shadow-lg shadow-purple-500/10'
-                    : 'bg-zinc-900/60 border-zinc-800/80 hover:border-purple-500/40'
-                }`}
-              >
-                <span className="text-[10px] font-mono uppercase font-bold text-zinc-400 block mb-0.5 flex items-center gap-1">
-                  <Layers size={11} /> Total de Criativos
-                </span>
-                <div className="text-2xl font-bold font-display text-white">{totalCount}</div>
-              </button>
+                <button
+                  onClick={() => setHubCaptionFilter('all')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubCaptionFilter === 'all'
+                      ? 'bg-purple-500/15 border-purple-500 shadow-lg shadow-purple-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-purple-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-zinc-400 block mb-0.5 flex items-center gap-1">
+                    <AlignLeft size={11} /> Todas as Legendas
+                  </span>
+                  <div className="text-2xl font-bold font-display text-white">{totalCaptionsWithText}</div>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-zinc-800/80">
+                <button
+                  onClick={() => setHubStatusFilter('pending_approval')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubStatusFilter === 'pending_approval'
+                      ? 'bg-orange-500/15 border-orange-500 shadow-lg shadow-orange-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-orange-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-orange-400 block mb-0.5 flex items-center gap-1">
+                    <Clock size={11} /> Aguardando Aprovação
+                  </span>
+                  <div className="text-2xl font-bold font-display text-orange-400">{pendingCount}</div>
+                </button>
 
-            </div>
+                <button
+                  onClick={() => setHubStatusFilter('approved')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubStatusFilter === 'approved'
+                      ? 'bg-blue-500/15 border-blue-500 shadow-lg shadow-blue-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-blue-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-blue-400 block mb-0.5 flex items-center gap-1">
+                    <CheckCircle2 size={11} /> Aprovados
+                  </span>
+                  <div className="text-2xl font-bold font-display text-blue-400">{approvedCount}</div>
+                </button>
+
+                <button
+                  onClick={() => setHubStatusFilter('changes_requested')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubStatusFilter === 'changes_requested'
+                      ? 'bg-amber-500/15 border-amber-500 shadow-lg shadow-amber-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-amber-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
+                    <MessageSquare size={11} /> Ajustes Solicitados
+                  </span>
+                  <div className="text-2xl font-bold font-display text-amber-400">{changesCount}</div>
+                </button>
+
+                <button
+                  onClick={() => setHubStatusFilter('all')}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                    hubStatusFilter === 'all'
+                      ? 'bg-purple-500/15 border-purple-500 shadow-lg shadow-purple-500/10'
+                      : 'bg-zinc-900/60 border-zinc-800/80 hover:border-purple-500/40'
+                  }`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-zinc-400 block mb-0.5 flex items-center gap-1">
+                    <Layers size={11} /> Total de Criativos
+                  </span>
+                  <div className="text-2xl font-bold font-display text-white">{totalCount}</div>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* CREATIVES GALLERY GRID */}
@@ -583,16 +948,19 @@ export default function ClientCreativeApprovalPage({
                 <CheckCircle2 size={32} />
               </div>
               <div className="space-y-1">
-                <h3 className="text-base font-bold text-white font-display">Nenhum criativo nesta categoria</h3>
+                <h3 className="text-base font-bold text-white font-display">Nenhum item nesta categoria</h3>
                 <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                  Alterne os filtros acima para visualizar os criativos das outras categorias.
+                  Alterne os filtros acima para visualizar os demais posts e legendas da central.
                 </p>
               </div>
               <button
-                onClick={() => setHubStatusFilter('all')}
+                onClick={() => {
+                  setHubStatusFilter('all');
+                  setHubCaptionFilter('all');
+                }}
                 className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white transition-all cursor-pointer inline-flex items-center gap-2"
               >
-                <span>Ver Todos ({totalCount})</span>
+                <span>Ver Todos</span>
               </button>
             </div>
           ) : (
@@ -602,15 +970,29 @@ export default function ClientCreativeApprovalPage({
                 const firstAsset = assets[0];
                 const isCar = creative.format === 'carousel' || assets.length > 1;
                 const isVid = creative.format === 'video' || firstAsset?.type === 'video';
+                
                 const isPending = creative.status === 'pending_approval' || creative.status === 'draft';
                 const isApproved = creative.status === 'approved';
                 const isChanges = creative.status === 'changes_requested';
+
+                const hasCaption = Boolean(creative.description?.trim());
+                const isCaptionPending = hasCaption && (creative.captionStatus === 'pending_approval' || !creative.captionStatus || creative.captionStatus === 'draft');
+                const isCaptionApproved = hasCaption && creative.captionStatus === 'approved';
+                const isCaptionChanges = hasCaption && creative.captionStatus === 'changes_requested';
 
                 return (
                   <div
                     key={creative.id}
                     className={`bg-[#14141c] rounded-3xl overflow-hidden shadow-xl hover:shadow-2xl transition-all flex flex-col border group ${
-                      isPending
+                      approvalFocus === 'caption'
+                        ? isCaptionPending
+                          ? 'border-orange-500/40 hover:border-orange-500/80 shadow-orange-500/5'
+                          : isCaptionApproved
+                          ? 'border-emerald-500/40 hover:border-emerald-500/80 shadow-emerald-500/5'
+                          : isCaptionChanges
+                          ? 'border-amber-500/40 hover:border-amber-500/80'
+                          : 'border-zinc-800/90 hover:border-amber-500/40'
+                        : isPending
                         ? 'border-orange-500/40 hover:border-orange-500/80 shadow-orange-500/5'
                         : isApproved
                         ? 'border-blue-500/40 hover:border-blue-500/80 shadow-blue-500/5'
@@ -660,36 +1042,54 @@ export default function ClientCreativeApprovalPage({
                         )}
                       </div>
 
-                      {/* STATUS BADGE (ORANGE FOR PENDING, BLUE FOR APPROVED) */}
+                      {/* STATUS BADGE */}
                       <div className="absolute top-3 right-3">
-                        {isPending && (
-                          <span className="px-2.5 py-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
-                            <Clock size={12} /> Aguardando Aprovação
-                          </span>
-                        )}
-                        {isApproved && (
-                          <span className="px-2.5 py-1 rounded-full bg-blue-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
-                            <CheckCircle2 size={12} /> Aprovado
-                          </span>
-                        )}
-                        {isChanges && (
-                          <span className="px-2.5 py-1 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
-                            <MessageSquare size={12} /> Ajustes
-                          </span>
+                        {approvalFocus === 'caption' ? (
+                          !hasCaption ? (
+                            <span className="px-2.5 py-1 rounded-full bg-zinc-800/90 border border-zinc-700 text-zinc-400 text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              Sem Legenda
+                            </span>
+                          ) : isCaptionPending ? (
+                            <span className="px-2.5 py-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
+                              <Clock size={12} /> Legenda Pendente
+                            </span>
+                          ) : isCaptionApproved ? (
+                            <span className="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              <CheckCircle2 size={12} /> Legenda Aprovada
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              <MessageSquare size={12} /> Ajuste na Legenda
+                            </span>
+                          )
+                        ) : (
+                          isPending ? (
+                            <span className="px-2.5 py-1 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg animate-pulse">
+                              <Clock size={12} /> Aguardando Aprovação
+                            </span>
+                          ) : isApproved ? (
+                            <span className="px-2.5 py-1 rounded-full bg-blue-500 text-white text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              <CheckCircle2 size={12} /> Aprovado
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full bg-amber-500 text-black text-[10px] font-bold flex items-center gap-1 shadow-lg">
+                              <MessageSquare size={12} /> Ajustes
+                            </span>
+                          )
                         )}
                       </div>
 
                       {/* HOVER OVERLAY: INSPECT HINT */}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 pointer-events-none">
                         <span className="px-3 py-1.5 rounded-xl bg-purple-600/90 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg backdrop-blur-sm">
-                          <Eye size={14} /> Inspecionar em Tela Cheia
+                          <Eye size={14} /> Abrir em Tela Cheia
                         </span>
                       </div>
                     </div>
 
                     {/* CARD BODY */}
                     <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                      <div className="space-y-2">
+                      <div className="space-y-2.5">
                         <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
                           <span className="text-purple-400 font-bold uppercase">{creative.clientName || clientName}</span>
                           <span>{new Date(creative.createdAt).toLocaleDateString('pt-BR')}</span>
@@ -702,15 +1102,48 @@ export default function ClientCreativeApprovalPage({
                           {creative.title}
                         </h3>
 
-                        {creative.description && (
-                          <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
-                            {creative.description}
-                          </p>
+                        {/* CAPTION BLOCK */}
+                        {hasCaption ? (
+                          <div className="space-y-1.5 bg-zinc-950/60 p-3 rounded-2xl border border-zinc-800/80">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-mono font-bold uppercase text-amber-400 flex items-center gap-1">
+                                <AlignLeft size={11} /> Legenda & Copy
+                              </span>
+                              <button
+                                onClick={() => handleCopyCaptionText(creative.description, creative.id)}
+                                className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                                title="Copiar texto"
+                              >
+                                {copiedCaptionId === creative.id ? (
+                                  <span className="text-emerald-400 font-bold">Copiado!</span>
+                                ) : (
+                                  <>
+                                    <Copy size={11} />
+                                    <span>Copiar</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                            <p className="text-xs text-zinc-300 line-clamp-3 leading-relaxed whitespace-pre-wrap font-sans">
+                              {creative.description}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-3 bg-zinc-900/40 border border-dashed border-zinc-800 rounded-2xl text-[11px] text-zinc-500 flex items-center gap-2">
+                            <AlignLeft size={13} className="text-zinc-600 shrink-0" />
+                            <span>Sem legenda cadastrada para este post.</span>
+                          </div>
                         )}
 
-                        {creative.clientFeedback && (
+                        {creative.captionFeedback && (
                           <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
-                            💬 "{creative.clientFeedback}"
+                            ✍️ Ajuste na Legenda: "{creative.captionFeedback}"
+                          </div>
+                        )}
+
+                        {creative.clientFeedback && !creative.captionFeedback && (
+                          <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
+                            💬 Feedback Visual: "{creative.clientFeedback}"
                           </div>
                         )}
                       </div>
@@ -718,194 +1151,214 @@ export default function ClientCreativeApprovalPage({
                       {/* INLINE ACTION BUTTONS */}
                       <div className="pt-3 border-t border-zinc-800/80 space-y-2">
                         
-                        <div className="flex items-center gap-2">
-                          {/* 1-Click Approve (Blue theme) */}
-                          <button
-                            onClick={() => handleApproveCreative(creative)}
-                            disabled={isSubmitting || isApproved}
-                            className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md ${
-                              isApproved
-                                ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'
-                            }`}
-                          >
-                            <Check size={13} strokeWidth={2.5} />
-                            <span>{isApproved ? 'Aprovado' : 'Aprovar'}</span>
-                          </button>
+                        {approvalFocus === 'caption' ? (
+                          <div className="flex items-center gap-2">
+                            {hasCaption ? (
+                              <>
+                                <button
+                                  onClick={() => handleApproveCaption(creative)}
+                                  disabled={isSubmitting || isCaptionApproved}
+                                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md ${
+                                    isCaptionApproved
+                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                      : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/20'
+                                  }`}
+                                >
+                                  <Check size={13} strokeWidth={2.5} />
+                                  <span>{isCaptionApproved ? 'Legenda Aprovada' : 'Aprovar Legenda'}</span>
+                                </button>
 
-                          {/* Request changes */}
-                          <button
-                            onClick={() => {
-                              setTargetFeedbackCreative(creative);
-                              setFeedbackType('changes');
-                              setShowFeedbackModal(true);
-                            }}
-                            className="px-3 py-2 rounded-xl bg-zinc-900 hover:bg-amber-500/10 text-zinc-300 hover:text-amber-400 border border-zinc-800 hover:border-amber-500/40 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                            title="Solicitar Ajustes"
-                          >
-                            <MessageSquare size={13} />
-                            <span>Ajustes</span>
-                          </button>
+                                <button
+                                  onClick={() => {
+                                    setTargetFeedbackCreative(creative);
+                                    setFeedbackTargetType('caption');
+                                    setFeedbackType('changes');
+                                    setShowFeedbackModal(true);
+                                  }}
+                                  className="px-3 py-2 rounded-xl bg-zinc-900 hover:bg-amber-500/10 text-zinc-300 hover:text-amber-400 border border-zinc-800 hover:border-amber-500/40 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                  title="Solicitar Ajuste na Legenda"
+                                >
+                                  <Edit3 size={13} />
+                                  <span>Ajustar</span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => handleInspectCreative(creative)}
+                                className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-400 hover:text-white transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <Eye size={13} />
+                                <span>Ver Criativo</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleApproveCreative(creative)}
+                              disabled={isSubmitting || isApproved}
+                              className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md ${
+                                isApproved
+                                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'
+                              }`}
+                            >
+                              <Check size={13} strokeWidth={2.5} />
+                              <span>{isApproved ? 'Aprovado' : 'Aprovar'}</span>
+                            </button>
 
-                          {/* Inspect Full Screen */}
-                          <button
-                            onClick={() => handleInspectCreative(creative)}
-                            className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-all cursor-pointer"
-                            title="Ver em Detalhes / Formato Feed"
-                          >
-                            <Maximize2 size={13} />
-                          </button>
-                        </div>
+                            <button
+                              onClick={() => {
+                                setTargetFeedbackCreative(creative);
+                                setFeedbackTargetType('all');
+                                setFeedbackType('changes');
+                                setShowFeedbackModal(true);
+                              }}
+                              className="px-3 py-2 rounded-xl bg-zinc-900 hover:bg-amber-500/10 text-zinc-300 hover:text-amber-400 border border-zinc-800 hover:border-amber-500/40 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                              title="Solicitar Ajustes"
+                            >
+                              <MessageSquare size={13} />
+                              <span>Ajustes</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleInspectCreative(creative)}
+                              className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-all cursor-pointer"
+                              title="Ver em Detalhes"
+                            >
+                              <Eye size={14} />
+                            </button>
+                          </div>
+                        )}
 
                       </div>
+
                     </div>
+
                   </div>
                 );
               })}
             </div>
           )}
 
-          {/* CONTACT & SECURITY FOOTER */}
-          <div className="text-center text-[11px] text-zinc-500 py-6 space-y-1">
-            <p className="flex items-center justify-center gap-1.5">
-              <Shield size={12} className="text-purple-400" />
-              Ambiente seguro e criptografado de aprovação de conteúdo
-            </p>
-            <p>© {new Date().getFullYear()} Planner de Conteúdo Multicanal</p>
-          </div>
         </main>
       )}
 
       {/* ========================================================================= */}
-      {/* 3. MODE B: DETAILED SINGLE CREATIVE INSPECTOR                              */}
+      {/* 3. MODE B: SINGLE CREATIVE DETAILED INSPECTOR & CAROUSEL VIEW             */}
       {/* ========================================================================= */}
       {viewMode === 'single' && activeCreative && (
-        <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-fade-in">
+        <main className="flex-1 max-w-6xl w-full mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           
-          {/* LEFT COLUMN: MEDIA CANVAS / SLIDES (7 COLS) */}
+          {/* LEFT COLUMN: VISUAL MOCKUP & CAROUSEL SLIDES (7 COLS) */}
           <section className="lg:col-span-7 flex flex-col items-center">
             
-            {/* Controls Bar above preview */}
-            <div className="w-full max-w-lg mb-3 flex items-center justify-between text-xs text-zinc-400">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setViewMode('hub')}
-                  className="px-2.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-[11px] font-bold text-zinc-300 hover:text-white flex items-center gap-1 cursor-pointer transition-all"
-                  title="Voltar para a lista completa de criativos"
-                >
-                  <ArrowLeft size={12} />
-                  <span>Todos os Criativos</span>
-                </button>
-                <span className="font-mono text-[11px] uppercase font-bold text-zinc-400 px-2 py-0.5 bg-zinc-900 rounded-md border border-zinc-800">
-                  {isCarousel ? `Carrossel (${activeAssets.length} slides)` : isVideo ? 'Vídeo' : 'Imagem'}
-                </span>
-              </div>
+            {/* TOP CONTROLS FOR VISUAL INSPECTION */}
+            <div className="w-full max-w-lg mb-4 flex items-center justify-between">
+              <button
+                onClick={() => setViewMode('hub')}
+                className="text-xs font-bold text-zinc-400 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors bg-zinc-900/80 px-3 py-1.5 rounded-xl border border-zinc-800"
+              >
+                <ArrowLeft size={14} />
+                <span>Voltar à Central ({creatives.length} posts)</span>
+              </button>
 
-              {/* Viewport switch: Feed Mockup vs Clean */}
-              <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-lg p-0.5">
+              <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
                 <button
                   onClick={() => setMockupMode('feed')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
-                    mockupMode === 'feed' ? 'bg-purple-600 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                    mockupMode === 'feed' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
+                  title="Simular visualização no feed do Instagram"
                 >
-                  Feed
+                  <Smartphone size={12} />
+                  <span>Feed</span>
                 </button>
                 <button
                   onClick={() => setMockupMode('clean')}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
-                    mockupMode === 'clean' ? 'bg-purple-600 text-white shadow-sm' : 'text-zinc-400 hover:text-white'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                    mockupMode === 'clean' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
+                  title="Visualização limpa da arte"
                 >
-                  Limpo
+                  <Maximize2 size={12} />
+                  <span>Arte Pura</span>
                 </button>
               </div>
             </div>
 
-            {/* PREVIEW CONTAINER */}
-            <div className="w-full max-w-lg bg-[#14141c] border border-zinc-800 rounded-3xl overflow-hidden shadow-2xl relative">
+            {/* INSTAGRAM MOCKUP CONTAINER */}
+            <div className="w-full max-w-lg bg-black border border-zinc-800 rounded-3xl overflow-hidden shadow-2xl relative">
               
-              {/* INSTAGRAM / SOCIAL HEADER (Feed Mockup) */}
+              {/* FEED HEADER SIMULATION */}
               {mockupMode === 'feed' && (
-                <div className="p-3.5 border-b border-zinc-800/80 bg-[#181822] flex items-center justify-between">
+                <div className="p-3.5 bg-zinc-950 border-b border-zinc-800/80 flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-purple-500 to-orange-400 p-[1.5px]">
-                      <div className="w-full h-full bg-zinc-900 rounded-full flex items-center justify-center text-[10px] font-bold text-white">
-                        {(activeCreative.clientName || clientName)?.charAt(0) || 'C'}
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-yellow-500 via-pink-500 to-purple-600 p-0.5">
+                      <div className="w-full h-full rounded-full bg-black flex items-center justify-center font-bold text-xs text-white">
+                        {clientName.charAt(0).toUpperCase()}
                       </div>
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-white leading-tight">
-                        {(activeCreative.clientName || clientName)?.toLowerCase().replace(/\s+/g, '.') || 'cliente.oficial'}
-                      </p>
-                      <p className="text-[10px] text-zinc-500">Publicação Patrocinada / Feed</p>
+                      <span className="text-xs font-bold text-white block leading-tight">{clientName.toLowerCase().replace(/\s+/g, '')}</span>
+                      <span className="text-[10px] text-zinc-400 block leading-none">Publicação Oficial</span>
                     </div>
                   </div>
-                  <div className="text-zinc-500 font-bold text-sm tracking-widest">•••</div>
+                  <div className="text-zinc-400 flex items-center gap-1 font-mono text-xs">
+                    <Instagram size={14} className="text-pink-500" />
+                  </div>
                 </div>
               )}
 
-              {/* MEDIA CANVAS */}
-              <div 
-                className={`relative bg-black flex items-center justify-center overflow-hidden select-none ${
-                  activeCreative.aspectRatio === '9:16'
-                    ? 'aspect-[9/16] min-h-[500px]'
-                    : activeCreative.aspectRatio === '4:5'
-                    ? 'aspect-[4/5] min-h-[440px]'
-                    : activeCreative.aspectRatio === '16:9'
-                    ? 'aspect-video min-h-[280px]'
-                    : 'aspect-square min-h-[400px]'
-                }`}
-              >
-                {activeAssets.length === 0 ? (
-                  <div className="p-12 text-center text-zinc-600">
-                    <ImageIcon size={48} className="mx-auto mb-2 opacity-40" />
-                    <p className="text-xs font-medium">Nenhuma mídia anexada a este criativo</p>
-                  </div>
-                ) : isVideo || currentAsset?.type === 'video' ? (
-                  <video
-                    key={currentAsset?.url || 'video'}
-                    src={currentAsset?.url}
-                    controls
-                    playsInline
-                    className="w-full h-full object-contain"
-                  />
-                ) : (
-                  <AnimatePresence mode="wait">
-                    <motion.img
-                      key={currentSlideIndex}
-                      src={currentAsset?.url}
-                      alt={currentAsset?.title || `Slide ${currentSlideIndex + 1}`}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      transition={{ duration: 0.2 }}
+              {/* MEDIA DISPLAY AREA */}
+              <div className="relative aspect-square sm:aspect-square bg-zinc-950 flex items-center justify-center overflow-hidden">
+                {activeSlide ? (
+                  isVideo ? (
+                    <video
+                      src={activeSlide.url}
+                      controls
+                      autoPlay
+                      muted
+                      loop
                       className="w-full h-full object-contain"
                     />
-                  </AnimatePresence>
+                  ) : (
+                    <img
+                      src={activeSlide.url}
+                      alt={activeSlide.title || `Slide ${currentSlideIndex + 1}`}
+                      className="w-full h-full object-contain select-none"
+                    />
+                  )
+                ) : (
+                  <div className="text-zinc-600 text-center p-8 space-y-2">
+                    <ImageIcon size={48} className="mx-auto text-zinc-700" />
+                    <p className="text-xs">Nenhuma imagem carregada</p>
+                  </div>
                 )}
 
                 {/* CAROUSEL SLIDE NUMBER BADGE */}
-                {isCarousel && activeAssets.length > 1 && (
-                  <div className="absolute top-3 right-3 bg-black/75 backdrop-blur-md px-2.5 py-1 rounded-full text-[11px] font-mono font-bold text-white border border-white/10 shadow-lg z-10">
-                    {currentSlideIndex + 1}/{activeAssets.length}
+                {isCarousel && (
+                  <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur-md border border-white/10 text-white font-mono text-xs font-bold flex items-center gap-1 shadow-lg">
+                    <span>{currentSlideIndex + 1}</span>
+                    <span className="text-zinc-400">/</span>
+                    <span>{activeAssets.length}</span>
                   </div>
                 )}
 
-                {/* CAROUSEL NAVIGATION ARROWS */}
+                {/* CAROUSEL PREV / NEXT BUTTONS */}
                 {isCarousel && activeAssets.length > 1 && (
                   <>
                     <button
                       onClick={() => setCurrentSlideIndex((prev) => (prev - 1 + activeAssets.length) % activeAssets.length)}
-                      className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white border border-white/20 flex items-center justify-center backdrop-blur-md transition-all cursor-pointer z-20 shadow-lg"
-                      title="Slide Anterior"
+                      className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/75 hover:bg-black text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer shadow-lg backdrop-blur-sm"
+                      title="Slide Anterior (Seta Esquerda)"
                     >
                       <ChevronLeft size={20} />
                     </button>
                     <button
                       onClick={() => setCurrentSlideIndex((prev) => (prev + 1) % activeAssets.length)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/90 text-white border border-white/20 flex items-center justify-center backdrop-blur-md transition-all cursor-pointer z-20 shadow-lg"
-                      title="Próximo Slide"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/75 hover:bg-black text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer shadow-lg backdrop-blur-sm"
+                      title="Próximo Slide (Seta Direita)"
                     >
                       <ChevronRight size={20} />
                     </button>
@@ -913,39 +1366,45 @@ export default function ClientCreativeApprovalPage({
                 )}
               </div>
 
-              {/* CAROUSEL DOTS INDICATOR */}
-              {isCarousel && activeAssets.length > 1 && (
-                <div className="py-2.5 bg-[#14141c] flex items-center justify-center gap-1.5 border-t border-zinc-800/60">
-                  {activeAssets.map((_, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setCurrentSlideIndex(idx)}
-                      className={`h-1.5 rounded-full transition-all cursor-pointer ${
-                        idx === currentSlideIndex ? 'w-6 bg-purple-500' : 'w-1.5 bg-zinc-700 hover:bg-zinc-500'
-                      }`}
-                      title={`Ir para o slide ${idx + 1}`}
-                    />
-                  ))}
+              {/* FEED FOOTER SIMULATION */}
+              {mockupMode === 'feed' && (
+                <div className="p-3.5 bg-zinc-950 border-t border-zinc-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-zinc-300">
+                    <div className="flex items-center gap-3">
+                      <ThumbsUp size={16} className="text-zinc-400" />
+                      <MessageCircle size={16} className="text-zinc-400" />
+                      <Share2 size={16} className="text-zinc-400" />
+                    </div>
+                    {isCarousel && (
+                      <div className="flex items-center gap-1">
+                        {activeAssets.map((_, idx) => (
+                          <div
+                            key={idx}
+                            className={`h-1.5 rounded-full transition-all ${
+                              idx === currentSlideIndex ? 'w-4 bg-blue-500' : 'w-1.5 bg-zinc-700'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
+
             </div>
 
-            {/* CAROUSEL THUMBNAIL STRIP */}
+            {/* SLIDE THUMBNAIL STRIP (FOR CAROUSELS) */}
             {isCarousel && activeAssets.length > 1 && (
-              <div className="w-full max-w-lg mt-4 bg-zinc-900/60 p-2.5 rounded-2xl border border-zinc-800">
-                <div className="text-[10px] font-mono uppercase font-bold text-zinc-500 mb-2 px-1 flex items-center justify-between">
-                  <span>Navegar pelos {activeAssets.length} slides</span>
-                  <span className="text-zinc-400">Clique para abrir</span>
-                </div>
-                <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+              <div className="w-full max-w-lg mt-3 overflow-x-auto pb-2">
+                <div className="flex items-center gap-2">
                   {activeAssets.map((asset, idx) => (
                     <button
                       key={asset.id || idx}
                       onClick={() => setCurrentSlideIndex(idx)}
-                      className={`relative w-14 h-14 shrink-0 rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${
+                      className={`relative w-14 h-14 rounded-xl overflow-hidden border-2 flex-shrink-0 cursor-pointer transition-all ${
                         idx === currentSlideIndex
                           ? 'border-purple-500 scale-105 shadow-md shadow-purple-500/20'
-                          : 'border-zinc-800 hover:border-zinc-600 opacity-70 hover:opacity-100'
+                          : 'border-zinc-800 opacity-60 hover:opacity-100'
                       }`}
                     >
                       <img src={asset.url} alt={`Thumb ${idx + 1}`} className="w-full h-full object-cover" />
@@ -997,17 +1456,17 @@ export default function ClientCreativeApprovalPage({
 
                 {activeCreative.status === 'approved' && (
                   <span className="px-3 py-1 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center gap-1 shadow-md">
-                    <CheckCircle2 size={13} /> Aprovado
+                    <CheckCircle2 size={13} /> Visual Aprovado
                   </span>
                 )}
                 {(activeCreative.status === 'pending_approval' || activeCreative.status === 'draft') && (
                   <span className="px-3 py-1 rounded-full bg-orange-500 text-white text-xs font-bold flex items-center gap-1 shadow-md animate-pulse">
-                    <Clock size={13} /> Aguardando Aprovação
+                    <Clock size={13} /> Visual Pendente
                   </span>
                 )}
                 {activeCreative.status === 'changes_requested' && (
                   <span className="px-3 py-1 rounded-full bg-amber-500 text-black text-xs font-bold flex items-center gap-1 shadow-md">
-                    <MessageSquare size={13} /> Ajustes Solicitados
+                    <MessageSquare size={13} /> Ajuste Solicitado
                   </span>
                 )}
               </div>
@@ -1018,21 +1477,95 @@ export default function ClientCreativeApprovalPage({
                 </h2>
               </div>
 
-              {activeCreative.description && (
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-mono font-bold uppercase text-zinc-400 block">
-                    Legenda / Texto da Publicação
+              {/* LEGENDA / TEXTO DA PUBLICAÇÃO WITH COPY AND CAPTION APPROVAL */}
+              <div className="space-y-2 pt-2 border-t border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-mono font-bold uppercase text-amber-400 flex items-center gap-1.5">
+                    <AlignLeft size={13} />
+                    <span>Legenda & Copywriting</span>
                   </label>
-                  <div className="p-4 bg-zinc-950/70 border border-zinc-800/80 rounded-2xl text-xs text-zinc-300 leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap">
-                    {activeCreative.description}
+
+                  {activeCreative.description && (
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                        activeCreative.captionStatus === 'approved'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : activeCreative.captionStatus === 'changes_requested'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                          : 'bg-orange-500/20 text-orange-400 border border-orange-500/30 animate-pulse'
+                      }`}>
+                        {activeCreative.captionStatus === 'approved' ? 'Legenda Aprovada' : activeCreative.captionStatus === 'changes_requested' ? 'Ajuste na Legenda' : 'Legenda Pendente'}
+                      </span>
+
+                      <button
+                        onClick={() => handleCopyCaptionText(activeCreative.description, activeCreative.id)}
+                        className="text-xs text-zinc-400 hover:text-white flex items-center gap-1 bg-zinc-900 px-2 py-1 rounded-lg border border-zinc-800 cursor-pointer"
+                        title="Copiar Legenda"
+                      >
+                        <Copy size={12} />
+                        <span>{copiedCaptionId === activeCreative.id ? 'Copiado!' : 'Copiar'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {activeCreative.description ? (
+                  <div className="space-y-3">
+                    <div className="p-4 bg-zinc-950/80 border border-amber-500/20 rounded-2xl text-xs text-zinc-200 leading-relaxed max-h-56 overflow-y-auto whitespace-pre-wrap font-sans selection:bg-amber-500">
+                      {activeCreative.description}
+                    </div>
+
+                    {/* CAPTION DIRECT APPROVAL / ADJUSTMENT BUTTONS */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleApproveCaption(activeCreative)}
+                        disabled={isSubmitting || activeCreative.captionStatus === 'approved'}
+                        className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                          activeCreative.captionStatus === 'approved'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/20'
+                        }`}
+                      >
+                        <Check size={14} strokeWidth={2.5} />
+                        <span>{activeCreative.captionStatus === 'approved' ? 'Legenda Já Aprovada' : 'Aprovar Esta Legenda'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setTargetFeedbackCreative(activeCreative);
+                          setFeedbackTargetType('caption');
+                          setFeedbackType('changes');
+                          setShowFeedbackModal(true);
+                        }}
+                        disabled={isSubmitting}
+                        className="px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-amber-500/40 text-amber-400 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <Edit3 size={13} />
+                        <span>Ajustar Legenda</span>
+                      </button>
+                    </div>
                   </div>
+                ) : (
+                  <div className="p-4 bg-zinc-950/50 border border-dashed border-zinc-800 rounded-2xl text-xs text-zinc-500 flex items-center gap-2">
+                    <AlignLeft size={16} className="text-zinc-600 shrink-0" />
+                    <span>Nenhuma legenda foi cadastrada pela equipe para este post ainda.</span>
+                  </div>
+                )}
+              </div>
+
+              {activeCreative.captionFeedback && (
+                <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs text-amber-300 space-y-1">
+                  <span className="font-mono font-bold uppercase text-[10px] block text-amber-400">
+                    Ajuste solicitado na Legenda:
+                  </span>
+                  <p className="italic">"{activeCreative.captionFeedback}"</p>
                 </div>
               )}
 
               {activeCreative.clientFeedback && (
                 <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs text-amber-300 space-y-1">
                   <span className="font-mono font-bold uppercase text-[10px] block text-amber-400">
-                    Último feedback registrado:
+                    Ajuste solicitado no Visual:
                   </span>
                   <p className="italic">"{activeCreative.clientFeedback}"</p>
                   {activeCreative.approvalDate && (
@@ -1042,18 +1575,19 @@ export default function ClientCreativeApprovalPage({
               )}
             </div>
 
-            {/* DECISION ACTION BUTTONS (BLUE FOR APPROVAL) */}
+            {/* DECISION ACTION BUTTONS (VISUAL APPROVAL) */}
             <div className="bg-[#14141c] border border-zinc-800 rounded-3xl p-6 shadow-xl space-y-4">
-              <h3 className="text-sm font-bold text-white font-display">
-                Sua Decisão sobre este Criativo
+              <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                <ImageIcon size={16} className="text-blue-400" />
+                <span>Decisão sobre a Arte Visual / Mídia</span>
               </h3>
               <p className="text-xs text-zinc-400 leading-relaxed">
-                Avalie o visual e textos do post. Aprove imediatamente ou solicite ajustes apontando o que precisa mudar.
+                Avalie os slides e imagens do post. Aprove a arte visual ou solicite ajustes gráficos.
               </p>
 
               <div className="space-y-2.5 pt-2">
                 
-                {/* APPROVE BUTTON (BLUE THEME) */}
+                {/* APPROVE VISUAL BUTTON (BLUE THEME) */}
                 <button
                   onClick={() => handleApproveCreative(activeCreative)}
                   disabled={isSubmitting || activeCreative.status === 'approved'}
@@ -1064,13 +1598,14 @@ export default function ClientCreativeApprovalPage({
                   }`}
                 >
                   <Check size={18} strokeWidth={2.5} />
-                  <span>{activeCreative.status === 'approved' ? 'Criativo Já Aprovado' : 'Aprovar Criativo'}</span>
+                  <span>{activeCreative.status === 'approved' ? 'Visual Já Aprovado' : 'Aprovar Arte Visual'}</span>
                 </button>
 
-                {/* REQUEST CHANGES BUTTON */}
+                {/* REQUEST CHANGES ON VISUAL BUTTON */}
                 <button
                   onClick={() => {
                     setTargetFeedbackCreative(activeCreative);
+                    setFeedbackTargetType('all');
                     setFeedbackType('changes');
                     setShowFeedbackModal(true);
                   }}
@@ -1078,21 +1613,7 @@ export default function ClientCreativeApprovalPage({
                   className="w-full py-3 px-5 rounded-2xl font-bold text-xs bg-zinc-900 border border-amber-500/30 hover:border-amber-500 text-amber-400 hover:bg-amber-500/10 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <MessageSquare size={16} />
-                  <span>Solicitar Alterações ou Ajustes</span>
-                </button>
-
-                {/* REJECT BUTTON */}
-                <button
-                  onClick={() => {
-                    setTargetFeedbackCreative(activeCreative);
-                    setFeedbackType('reject');
-                    setShowFeedbackModal(true);
-                  }}
-                  disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 rounded-xl font-medium text-xs text-zinc-500 hover:text-red-400 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <X size={14} />
-                  <span>Reprovar este Conteúdo</span>
+                  <span>Solicitar Alterações na Arte Visual</span>
                 </button>
               </div>
             </div>
@@ -1132,11 +1653,13 @@ export default function ClientCreativeApprovalPage({
             <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
               <div className="flex items-center gap-2">
                 <div className={`p-2 rounded-xl ${feedbackType === 'changes' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                  <MessageSquare size={18} />
+                  {feedbackTargetType === 'caption' ? <AlignLeft size={18} /> : <MessageSquare size={18} />}
                 </div>
                 <div>
                   <h3 className="font-bold text-sm text-white">
-                    {feedbackType === 'changes' ? 'Descreva os Ajustes Desejados' : 'Motivo da Reprovação'}
+                    {feedbackTargetType === 'caption' 
+                      ? 'Ajustes na Legenda / Copy' 
+                      : (feedbackType === 'changes' ? 'Ajustes na Arte Visual' : 'Motivo da Reprovação')}
                   </h3>
                   <span className="text-[10px] text-zinc-400 block truncate max-w-[240px]">
                     {targetFeedbackCreative.title}
@@ -1148,46 +1671,64 @@ export default function ClientCreativeApprovalPage({
                   setShowFeedbackModal(false);
                   setTargetFeedbackCreative(null);
                 }}
-                className="text-zinc-500 hover:text-white p-1 cursor-pointer"
+                className="text-zinc-500 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              {feedbackType === 'changes'
-                ? 'Indique quais slides, imagens, fontes ou textos você deseja alterar na arte.'
-                : 'Explique o motivo para que a equipe possa produzir uma nova proposta alinhada à sua expectativa.'}
-            </p>
+            {/* PRESET QUICK SUGGESTIONS */}
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-mono text-zinc-400 block">
+                Sugestões rápidas:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {(feedbackTargetType === 'caption' ? CAPTION_QUICK_SUGGESTIONS : CREATIVE_QUICK_SUGGESTIONS).map((sug, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setFeedbackText(prev => prev ? `${prev}. ${sug}` : sug)}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer"
+                  >
+                    + {sug}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-            <textarea
-              rows={4}
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-              placeholder="Ex: Trocar foto do slide 3, ajustar título da capa..."
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl p-3.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-purple-500 transition-all resize-none"
-            />
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-300 block">
+                {feedbackTargetType === 'caption'
+                  ? 'Como você gostaria que a legenda ficasse?'
+                  : 'Descreva detalhadamente o que precisa ser ajustado:'}
+              </label>
+              <textarea
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+                placeholder={feedbackTargetType === 'caption' 
+                  ? 'Ex: Por favor altere a chamada final para "Comente QUERO para receber o link"...' 
+                  : 'Ex: Por favor trocar a foto do slide 3 por uma com maior contraste...'}
+                className="w-full h-32 p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 focus:border-amber-500 focus:outline-none text-xs text-white placeholder-zinc-500 resize-none font-sans"
+              />
+            </div>
 
-            <div className="flex gap-2.5 pt-1">
+            <div className="flex items-center gap-3 pt-2">
               <button
                 onClick={() => {
                   setShowFeedbackModal(false);
                   setTargetFeedbackCreative(null);
                 }}
-                className="flex-1 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold text-zinc-400 hover:text-white transition-all cursor-pointer"
+                className="flex-1 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-400 hover:text-white transition-all cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleSendFeedback}
-                disabled={!feedbackText.trim() || isSubmitting}
-                className={`flex-1 py-2.5 rounded-xl text-xs font-bold text-white transition-all cursor-pointer shadow-lg disabled:opacity-50 ${
-                  feedbackType === 'changes'
-                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:opacity-90'
-                    : 'bg-red-600 hover:bg-red-500'
-                }`}
+                disabled={isSubmitting || !feedbackText.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-amber-600/20"
               >
-                {isSubmitting ? 'Enviando...' : 'Enviar Feedback'}
+                <Send size={13} />
+                <span>Enviar Ajuste</span>
               </button>
             </div>
           </motion.div>

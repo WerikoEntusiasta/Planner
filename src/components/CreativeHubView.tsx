@@ -6,7 +6,8 @@ import {
   X, MessageSquare, Send, Copy, ExternalLink, Trash2, Edit3, 
   ArrowLeft, ArrowRight, Star, Clock, CheckCircle2, AlertCircle, 
   Search, Filter, Smartphone, RefreshCw, Upload, Eye, Layers, 
-  CheckCheck, Share2, HelpCircle, Shield
+  CheckCheck, Share2, HelpCircle, Shield, AlignLeft, FileText, 
+  Wand2, MessageCircle, MoreHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ClientCreativeApprovalPage from './ClientCreativeApprovalPage';
@@ -39,18 +40,35 @@ export default function CreativeHubView({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterFormat, setFilterFormat] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterCaptionStatus, setFilterCaptionStatus] = useState<string>('all');
   const [selectedClientId, setSelectedClientId] = useState<string>(activeClientId || 'all');
+  
+  // Link copy feedback states
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [copiedCaptionToken, setCopiedCaptionToken] = useState<string | null>(null);
   const [copiedGeneralLink, setCopiedGeneralLink] = useState(false);
+  const [copiedGeneralCaptionLink, setCopiedGeneralCaptionLink] = useState(false);
+  
+  // Preview modal states
   const [previewingShareToken, setPreviewingShareToken] = useState<string | null>(null);
   const [previewingHubClientId, setPreviewingHubClientId] = useState<string | null>(null);
+  const [previewingFocus, setPreviewingFocus] = useState<'all' | 'visual' | 'caption'>('all');
 
-  // Modal State for Creating/Editing
+  // Modal State for Creating/Editing full creative
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCreative, setEditingCreative] = useState<Creative | null>(null);
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
 
-  // Modal Form States
+  // Quick Caption Editor Modal State
+  const [captionModalCreative, setCaptionModalCreative] = useState<Creative | null>(null);
+  const [isCaptionModalOpen, setIsCaptionModalOpen] = useState(false);
+  const [captionText, setCaptionText] = useState('');
+  const [isSavingCaption, setIsSavingCaption] = useState(false);
+  const [isGeneratingAICaption, setIsGeneratingAICaption] = useState(false);
+  const [aiTone, setAiTone] = useState('persuasivo e envolvente');
+  const [aiGoal, setAiGoal] = useState('engajamento e conversão');
+
+  // Modal Form States for Full Creative
   const [formTitle, setFormTitle] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formClientId, setFormClientId] = useState(activeClientId || (clients[0]?.id || 'default_client'));
@@ -123,7 +141,7 @@ export default function CreativeHubView({
     setIsModalOpen(true);
   };
 
-  // Handle open modal for edit
+  // Handle open modal for edit full creative
   const handleOpenEditModal = (creative: Creative) => {
     setEditingCreative(creative);
     setFormTitle(creative.title);
@@ -138,6 +156,92 @@ export default function CreativeHubView({
     setIsSaving(false);
     setIsProcessingFiles(false);
     setIsModalOpen(true);
+  };
+
+  // Handle open Quick Caption Editor
+  const handleOpenCaptionEditor = (creative: Creative) => {
+    setCaptionModalCreative(creative);
+    setCaptionText(creative.description || '');
+    setIsCaptionModalOpen(true);
+  };
+
+  // Handle Save Quick Caption
+  const handleSaveCaption = async (generateLinkImmediately = false) => {
+    if (!captionModalCreative) return;
+    setIsSavingCaption(true);
+
+    const updatedCreative: Creative = {
+      ...captionModalCreative,
+      description: captionText.trim(),
+      captionStatus: captionText.trim() ? 'pending_approval' : undefined,
+      updatedAt: new Date().toISOString()
+    };
+
+    // Optimistic UI update
+    const updatedCreatives = creatives.map(c => c.id === captionModalCreative.id ? updatedCreative : c);
+    setCreatives(updatedCreatives);
+    try {
+      localStorage.setItem('creator_planner_creatives', JSON.stringify(updatedCreatives));
+    } catch (e) {}
+
+    // Save to server
+    if (currentUser) {
+      try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
+        await fetch('/api/creatives', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': currentUser.id,
+            'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+          },
+          body: JSON.stringify(updatedCreative)
+        });
+      } catch (err) {
+        console.error('Failed to save caption on server:', err);
+      }
+    }
+
+    setIsSavingCaption(false);
+
+    if (generateLinkImmediately) {
+      handleCopyCaptionLink(captionModalCreative.shareToken);
+    } else {
+      setIsCaptionModalOpen(false);
+    }
+  };
+
+  // Handle AI Generate Caption using Gemini 3.7 Flash
+  const handleGenerateAICaption = async () => {
+    if (!captionModalCreative) return;
+    setIsGeneratingAICaption(true);
+    try {
+      const res = await fetch('/api/ai/caption-generator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: captionModalCreative.title,
+          clientName: captionModalCreative.clientName,
+          platform: captionModalCreative.platform,
+          format: captionModalCreative.format,
+          tone: aiTone,
+          goal: aiGoal,
+          existingCaption: captionText
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data?.caption) {
+        setCaptionText(data.data.caption);
+      } else {
+        alert('Não foi possível gerar a legenda no momento. Tente novamente.');
+      }
+    } catch (err) {
+      console.error('Error generating caption:', err);
+      alert('Erro ao conectar com a IA para gerar legenda.');
+    } finally {
+      setIsGeneratingAICaption(false);
+    }
   };
 
   // Handle Apply AI generated carousel into creative form
@@ -157,7 +261,7 @@ export default function CreativeHubView({
     setIsModalOpen(true);
   };
 
-  // Client-side image compression helper for optimal loading, memory, and fast syncing
+  // Client-side image compression helper
   const compressImageFile = (file: File): Promise<string> => {
     return new Promise((resolve) => {
       if (file.type === 'image/svg+xml' || file.type === 'image/gif') {
@@ -191,97 +295,81 @@ export default function CreativeHubView({
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const compressed = canvas.toDataURL('image/jpeg', 0.85);
-          resolve(compressed);
-        } else {
+        if (!ctx) {
           const reader = new FileReader();
           reader.onload = (e) => resolve((e.target?.result as string) || '');
-          reader.onerror = () => resolve('');
           reader.readAsDataURL(file);
+          return;
         }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        resolve(dataUrl);
       };
       img.onerror = () => {
         URL.revokeObjectURL(objectUrl);
         const reader = new FileReader();
         reader.onload = (e) => resolve((e.target?.result as string) || '');
-        reader.onerror = () => resolve('');
         reader.readAsDataURL(file);
       };
       img.src = objectUrl;
     });
   };
 
-  // File Upload Handler (Supports images up to 20 slides, and large videos up to 15GB)
+  // Process uploaded files (Carousels up to 20 images or Videos up to 15GB)
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
     setUploadError(null);
-
-    const fileList = Array.from(files);
-
-    if (formFormat === 'carousel') {
-      const remainingSlots = 20 - formAssets.length;
-      if (fileList.length > remainingSlots) {
-        setUploadError(`Você pode adicionar no máximo 20 imagens no carrossel. Foram adicionadas as primeiras ${remainingSlots} selecionadas.`);
-      }
-    }
-
-    const filesToProcess = formFormat === 'carousel' ? fileList.slice(0, 20 - formAssets.length) : fileList.slice(0, 1);
     setIsProcessingFiles(true);
 
     try {
+      const remainingSlots = 20 - formAssets.length;
+      if (remainingSlots <= 0) {
+        setUploadError('Limite de 20 slides por carrossel atingido.');
+        setIsProcessingFiles(false);
+        return;
+      }
+
+      const filesToProcess = files.slice(0, remainingSlots);
       const newAssets: CreativeAsset[] = [];
 
-      for (let index = 0; index < filesToProcess.length; index++) {
-        const file = filesToProcess[index];
-        const isVideoFile = file.type.startsWith('video/');
-        const isImageFile = file.type.startsWith('image/');
+      for (let i = 0; i < filesToProcess.length; i++) {
+        const file = filesToProcess[i];
+        const isVideo = file.type.startsWith('video/');
 
-        if (!isVideoFile && !isImageFile) {
-          setUploadError('Formato de arquivo não suportado. Por favor, envie imagens (PNG, JPG, WEBP) ou vídeos (MP4, MOV, WEBM).');
-          continue;
-        }
-
-        // Check max video limit (15GB = 15 * 1024 * 1024 * 1024 bytes)
-        const maxVideoSize = 15 * 1024 * 1024 * 1024;
-        if (isVideoFile && file.size > maxVideoSize) {
-          setUploadError('O arquivo de vídeo selecionado excede o limite máximo suportado de 15GB.');
-          continue;
-        }
-
-        if (isVideoFile) {
-          const videoBlobUrl = URL.createObjectURL(file);
+        if (isVideo) {
+          const videoUrl = URL.createObjectURL(file);
           newAssets.push({
-            id: `ast_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
-            name: file.name,
-            url: videoBlobUrl,
+            id: `asset_${Date.now()}_${i}`,
             type: 'video',
+            url: videoUrl,
+            name: file.name,
             size: file.size,
-            format: file.name.split('.').pop()?.toLowerCase(),
-            order: formAssets.length + index
+            format: file.type.split('/')[1] || 'mp4',
+            order: formAssets.length + i,
+            title: `Vídeo: ${file.name.slice(0, 20)}`
           });
         } else {
           const compressedDataUrl = await compressImageFile(file);
-          if (compressedDataUrl) {
-            newAssets.push({
-              id: `ast_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
-              name: file.name,
-              url: compressedDataUrl,
-              type: 'image',
-              size: file.size,
-              format: file.name.split('.').pop()?.toLowerCase(),
-              order: formAssets.length + index
-            });
-          }
+          newAssets.push({
+            id: `asset_${Date.now()}_${i}`,
+            type: 'image',
+            url: compressedDataUrl,
+            name: file.name,
+            size: file.size,
+            format: file.type.split('/')[1] || 'jpg',
+            order: formAssets.length + i,
+            title: `Slide ${formAssets.length + i + 1}`
+          });
         }
       }
 
       setFormAssets(prev => [...prev, ...newAssets]);
-    } catch (err: any) {
-      console.error('Error during file processing:', err);
-      setUploadError('Ocorreu um erro ao processar as mídias. Tente novamente.');
+    } catch (err) {
+      console.error('Error processing files:', err);
+      setUploadError('Erro ao carregar os arquivos. Tente novamente.');
     } finally {
       setIsProcessingFiles(false);
       if (fileInputRef.current) {
@@ -290,147 +378,120 @@ export default function CreativeHubView({
     }
   };
 
-  // Reorder slide left
-  const handleMoveSlideLeft = (index: number) => {
-    if (index === 0) return;
-    const updated = [...formAssets];
-    const temp = updated[index - 1];
-    updated[index - 1] = updated[index];
-    updated[index] = temp;
-    // Re-index orders
-    const reordered = updated.map((item, idx) => ({ ...item, order: idx }));
-    setFormAssets(reordered);
-    setPreviewSlideIndex(index - 1);
-  };
-
-  // Reorder slide right
-  const handleMoveSlideRight = (index: number) => {
-    if (index >= formAssets.length - 1) return;
-    const updated = [...formAssets];
-    const temp = updated[index + 1];
-    updated[index + 1] = updated[index];
-    updated[index] = temp;
-    // Re-index orders
-    const reordered = updated.map((item, idx) => ({ ...item, order: idx }));
-    setFormAssets(reordered);
-    setPreviewSlideIndex(index + 1);
-  };
-
-  // Set slide as cover (index 0)
-  const handleSetAsCover = (index: number) => {
-    if (index === 0) return;
-    const updated = [...formAssets];
-    const [selected] = updated.splice(index, 1);
-    updated.unshift(selected);
-    const reordered = updated.map((item, idx) => ({ ...item, order: idx }));
-    setFormAssets(reordered);
-    setPreviewSlideIndex(0);
-  };
-
-  // Delete slide
-  const handleDeleteSlide = (index: number) => {
-    const updated = formAssets.filter((_, idx) => idx !== index).map((item, idx) => ({ ...item, order: idx }));
+  // Remove asset from form
+  const handleRemoveAsset = (index: number) => {
+    const updated = formAssets.filter((_, idx) => idx !== index).map((asset, idx) => ({
+      ...asset,
+      order: idx
+    }));
     setFormAssets(updated);
-    if (previewSlideIndex >= updated.length && updated.length > 0) {
-      setPreviewSlideIndex(updated.length - 1);
+    if (previewSlideIndex >= updated.length) {
+      setPreviewSlideIndex(Math.max(0, updated.length - 1));
     }
   };
 
-  // Save Creative
+  // Move asset order in carousel
+  const handleMoveAsset = (index: number, direction: 'left' | 'right') => {
+    if (
+      (direction === 'left' && index === 0) ||
+      (direction === 'right' && index === formAssets.length - 1)
+    ) return;
+
+    const targetIndex = direction === 'left' ? index - 1 : index + 1;
+    const reordered = [...formAssets];
+    const temp = reordered[index];
+    reordered[index] = reordered[targetIndex];
+    reordered[targetIndex] = temp;
+
+    const normalized = reordered.map((item, idx) => ({ ...item, order: idx }));
+    setFormAssets(normalized);
+    setPreviewSlideIndex(targetIndex);
+  };
+
+  // Save creative (Create or Update)
   const handleSaveCreative = async (targetStatus: CreativeStatus = 'pending_approval') => {
     if (!formTitle.trim()) {
-      setUploadError('Por favor, informe o título do criativo.');
+      setUploadError('O título do criativo é obrigatório.');
       return;
     }
-    const resolvedClientId = formClientId || (clients[0]?.id || 'default_client');
+
     if (formAssets.length === 0) {
-      setUploadError('Por favor, adicione pelo menos uma imagem ou vídeo ao criativo.');
+      setUploadError('Adicione pelo menos 1 imagem ou vídeo para criar o criativo.');
       return;
     }
 
     setIsSaving(true);
     setUploadError(null);
 
-    try {
-      const clientObj = clients.find(c => c.id === resolvedClientId);
-      const creativeId = editingCreative?.id || `crt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const shareToken = editingCreative?.shareToken || `appr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const clientObj = clients.find(c => c.id === formClientId);
+    const clientName = clientObj?.name || 'Cliente';
+    const now = new Date().toISOString();
 
-      const newCreative: Creative = {
-        id: creativeId,
-        userId: currentUser?.id || 'user',
-        clientId: resolvedClientId,
-        clientName: clientObj?.name || 'Marca Principal',
-        title: formTitle.trim(),
-        description: formDescription.trim(),
-        format: formFormat,
-        platform: formPlatform,
-        status: editingCreative ? (editingCreative.status === 'draft' ? targetStatus : editingCreative.status) : targetStatus,
-        assets: formAssets,
-        aspectRatio: formAspectRatio,
-        shareToken,
-        clientFeedback: editingCreative?.clientFeedback,
-        approvalDate: editingCreative?.approvalDate,
-        createdAt: editingCreative?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+    const creativeData: Creative = {
+      id: editingCreative?.id || `crt_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      userId: currentUser?.id || 'default_user',
+      clientId: formClientId,
+      clientName: clientName,
+      title: formTitle.trim(),
+      description: formDescription.trim() || undefined,
+      format: formFormat,
+      platform: formPlatform,
+      status: targetStatus,
+      captionStatus: formDescription.trim() ? (editingCreative?.captionStatus || 'pending_approval') : undefined,
+      assets: formAssets,
+      aspectRatio: formAspectRatio,
+      shareToken: editingCreative?.shareToken || `token_${Date.now()}_${Math.random().toString(36).substr(2, 10)}`,
+      createdAt: editingCreative?.createdAt || now,
+      updatedAt: now
+    };
 
-      // 1. Update React state immediately
-      const updatedList = editingCreative
-        ? creatives.map(c => c.id === editingCreative.id ? newCreative : c)
-        : [newCreative, ...creatives];
-
-      setCreatives(updatedList);
-
-      // Safe localStorage persistence (prevent QuotaExceededError crash when carousels have multiple slides)
+    // Optimistic state update
+    if (editingCreative) {
+      const updated = creatives.map(c => c.id === editingCreative.id ? creativeData : c);
+      setCreatives(updated);
       try {
-        localStorage.setItem('creator_planner_creatives', JSON.stringify(updatedList));
-      } catch (storageErr) {
-        console.warn('LocalStorage quota reached, syncing via server database:', storageErr);
-        try {
-          const lightweightList = updatedList.map(c => ({
-            ...c,
-            assets: c.assets.slice(0, 3)
-          }));
-          localStorage.setItem('creator_planner_creatives', JSON.stringify(lightweightList));
-        } catch (e) {}
-      }
-
-      // 2. Persist to server backend
-      if (currentUser) {
-        try {
-          const userToken = localStorage.getItem('planner_user_token') || '';
-          await fetch('/api/creatives', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-user-id': currentUser.id,
-              'x-user-password': currentUser.password || '',
-              ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
-            },
-            body: JSON.stringify(newCreative)
-          });
-        } catch (err) {
-          console.error('Offline / Failed to sync creative to backend:', err);
-        }
-      }
-
-      setIsModalOpen(false);
-    } catch (err: any) {
-      console.error('Failed to save creative:', err);
-      setUploadError(err?.message || 'Erro inesperado ao salvar criativo.');
-    } finally {
-      setIsSaving(false);
+        localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+      } catch (e) {}
+    } else {
+      const updated = [creativeData, ...creatives];
+      setCreatives(updated);
+      try {
+        localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+      } catch (e) {}
     }
+
+    // Save to server
+    if (currentUser) {
+      try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
+        await fetch('/api/creatives', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': currentUser.id,
+            'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+          },
+          body: JSON.stringify(creativeData)
+        });
+      } catch (err) {
+        console.error('Failed to save to server:', err);
+      }
+    }
+
+    setIsSaving(false);
+    setIsModalOpen(false);
   };
 
-  // Delete Creative
+  // Delete creative
   const handleDeleteCreative = async (id: string) => {
     if (!confirm('Tem certeza que deseja excluir este criativo?')) return;
 
     const updated = creatives.filter(c => c.id !== id);
     setCreatives(updated);
-    localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+    try {
+      localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+    } catch (e) {}
 
     if (currentUser) {
       try {
@@ -449,7 +510,11 @@ export default function CreativeHubView({
     }
   };
 
-  // Copy Individual Client Approval Link
+  // ==========================================
+  // LINK SHARING & COPYING HANDLERS
+  // ==========================================
+
+  // 1. Copy Individual Client Approval Link (Full Post)
   const handleCopyLink = async (shareToken: string) => {
     const origin = window.location.origin;
     const approvalUrl = `${origin}/aprovar?creativeToken=${shareToken}`;
@@ -460,7 +525,18 @@ export default function CreativeHubView({
     }
   };
 
-  // Open WhatsApp with direct single approval message
+  // 2. Copy Individual Caption Approval Link (Focus on Caption)
+  const handleCopyCaptionLink = async (shareToken: string) => {
+    const origin = window.location.origin;
+    const approvalUrl = `${origin}/aprovar?creativeToken=${shareToken}&focus=caption`;
+    const success = await copyToClipboard(approvalUrl);
+    if (success) {
+      setCopiedCaptionToken(shareToken);
+      setTimeout(() => setCopiedCaptionToken(null), 3000);
+    }
+  };
+
+  // 3. Share Individual Post on WhatsApp
   const handleShareWhatsApp = (creative: Creative) => {
     const origin = window.location.origin;
     const approvalUrl = `${origin}/aprovar?creativeToken=${creative.shareToken}`;
@@ -471,7 +547,18 @@ export default function CreativeHubView({
     window.open(`https://wa.me/?text=${message}`, '_blank');
   };
 
-  // Copy General Client Approval Hub Link (All creatives in one link)
+  // 4. Share Individual Caption on WhatsApp
+  const handleShareCaptionWhatsApp = (creative: Creative) => {
+    const origin = window.location.origin;
+    const approvalUrl = `${origin}/aprovar?creativeToken=${creative.shareToken}&focus=caption`;
+    const message = encodeURIComponent(
+      `Olá! Adicionei a legenda para o criativo "${creative.title}".\n\n` +
+      `✍️ Revise o texto e aprove com 1 clique pelo link:\n${approvalUrl}`
+    );
+    window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
+  // 5. Copy General Client Approval Hub Link (All Creatives)
   const handleCopyGeneralLink = async (targetClientId?: string) => {
     const origin = window.location.origin;
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
@@ -483,7 +570,19 @@ export default function CreativeHubView({
     }
   };
 
-  // Share General Client Approval Hub on WhatsApp
+  // 6. Copy General Caption Approval Hub Link (All Captions)
+  const handleCopyGeneralCaptionLink = async (targetClientId?: string) => {
+    const origin = window.location.origin;
+    const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
+    const hubUrl = `${origin}/aprovar?client=${resolvedClient}&focus=caption&mode=hub`;
+    const success = await copyToClipboard(hubUrl);
+    if (success) {
+      setCopiedGeneralCaptionLink(true);
+      setTimeout(() => setCopiedGeneralCaptionLink(false), 3000);
+    }
+  };
+
+  // 7. Share General Client Approval Hub on WhatsApp
   const handleShareGeneralWhatsApp = (targetClientId?: string) => {
     const origin = window.location.origin;
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
@@ -498,13 +597,30 @@ export default function CreativeHubView({
     window.open(`https://wa.me/?text=${message}`, '_blank');
   };
 
-  // Open Preview as client (in-app modal or external link)
-  const handleViewAsClient = (shareToken: string) => {
+  // 8. Share General Caption Approval Hub on WhatsApp
+  const handleShareGeneralCaptionWhatsApp = (targetClientId?: string) => {
+    const origin = window.location.origin;
+    const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
+    const clientObj = clients.find(c => c.id === resolvedClient);
+    const clientName = clientObj?.name || 'Cliente';
+    const hubUrl = `${origin}/aprovar?client=${resolvedClient}&focus=caption&mode=hub`;
+    const message = encodeURIComponent(
+      `Olá ${clientName}! Seguem as legendas e textos de todos os criativos da nossa central para você revisar e aprovar de uma só vez:\n\n` +
+      `✍️ ${hubUrl}\n\n` +
+      `Você pode ler cada copy, sugerir ajustes ou aprovar com 1 clique!`
+    );
+    window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
+  // Open Preview as client
+  const handleViewAsClient = (shareToken: string, focus: 'all' | 'visual' | 'caption' = 'all') => {
+    setPreviewingFocus(focus);
     setPreviewingShareToken(shareToken);
   };
 
-  const handlePreviewGeneralHub = (targetClientId?: string) => {
+  const handlePreviewGeneralHub = (targetClientId?: string, focus: 'all' | 'visual' | 'caption' = 'all') => {
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
+    setPreviewingFocus(focus);
     setPreviewingHubClientId(resolvedClient);
   };
 
@@ -513,6 +629,12 @@ export default function CreativeHubView({
     if (selectedClientId !== 'all' && c.clientId !== selectedClientId) return false;
     if (filterFormat !== 'all' && c.format !== filterFormat) return false;
     if (filterStatus !== 'all' && c.status !== filterStatus) return false;
+    
+    if (filterCaptionStatus === 'missing' && Boolean(c.description?.trim())) return false;
+    if (filterCaptionStatus === 'has_caption' && !c.description?.trim()) return false;
+    if (filterCaptionStatus === 'pending_approval' && (!c.description?.trim() || (c.captionStatus && c.captionStatus !== 'pending_approval' && c.captionStatus !== 'draft'))) return false;
+    if (filterCaptionStatus === 'approved' && (!c.description?.trim() || c.captionStatus !== 'approved')) return false;
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = c.title.toLowerCase().includes(q);
@@ -528,7 +650,10 @@ export default function CreativeHubView({
   const pendingCount = creatives.filter(c => c.status === 'pending_approval' || c.status === 'draft').length;
   const approvedCount = creatives.filter(c => c.status === 'approved').length;
   const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
-  const approvalRate = totalCount > 0 ? Math.round((approvedCount / totalCount) * 100) : 0;
+  
+  const totalWithCaption = creatives.filter(c => Boolean(c.description?.trim())).length;
+  const pendingCaptionsCount = creatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
+  const missingCaptionsCount = creatives.filter(c => !c.description?.trim()).length;
 
   const currentSelectedClientObj = clients.find(c => c.id === selectedClientId);
 
@@ -541,13 +666,13 @@ export default function CreativeHubView({
           <div className="space-y-2 max-w-xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#8B5CF6]/10 border border-[#8B5CF6]/25 text-[#A78BFA] text-xs font-mono font-bold uppercase tracking-wider">
               <Layers size={14} className="text-[#8B5CF6]" />
-              <span>Central de Criativos & Aprovação</span>
+              <span>Central de Criativos & Aprovação de Legendas</span>
             </div>
             <h1 className="text-2xl md:text-3xl font-display font-bold text-[#F2F2F5] tracking-tight">
-              Organize Carrosséis, Vídeos e Imagens
+              Organize Carrosséis, Vídeos e Legendas
             </h1>
             <p className="text-xs md:text-sm text-[#92929F] leading-relaxed">
-              Suba até <strong className="text-[#F2F2F5]">20 imagens em carrossel</strong> com ordenação organizada ou <strong className="text-[#F2F2F5]">vídeos de até 15GB</strong> e compartilhe tanto o link individual de cada post quanto o <strong className="text-[#F2F2F5]">Link Geral da Central</strong> onde o cliente aprova tudo de uma só vez.
+              Envie artes visuais, carrosséis de até 20 slides ou vídeos de até 15GB. Se enviar sem legenda, você pode <strong className="text-[#F2F2F5]">adicionar e gerar o link de aprovação de legenda individual ou da central toda</strong> com 1 clique a qualquer momento.
             </p>
           </div>
 
@@ -570,53 +695,104 @@ export default function CreativeHubView({
           </div>
         </div>
 
-        {/* 1.1 PROMINENT GENERAL LINK BANNER (LINK GERAL PARA O CLIENTE VER TUDO) */}
-        <div className="mt-5 p-4 md:p-5 bg-[#17171F] rounded-xl border border-[#24242D] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-md bg-[#8B5CF6]/15 text-[#A78BFA] border border-[#8B5CF6]/30 text-[10px] font-mono font-bold uppercase">
-                Link Geral da Marca
-              </span>
-              <h3 className="text-sm font-semibold text-[#F2F2F5] font-display">
-                Central Geral de Aprovação do Cliente {currentSelectedClientObj ? `(${currentSelectedClientObj.name})` : ''}
-              </h3>
+        {/* 1.1 PROMINENT GENERAL LINKS BANNERS (MÍDIAS & LEGENDAS DA CENTRAL) */}
+        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          
+          {/* GENERAL HUB: CRIATIVOS & MÍDIAS */}
+          <div className="p-4 md:p-5 bg-[#17171F] rounded-xl border border-[#24242D] flex flex-col justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-md bg-[#8B5CF6]/15 text-[#A78BFA] border border-[#8B5CF6]/30 text-[10px] font-mono font-bold uppercase">
+                  Central Geral de Criativos
+                </span>
+                <h3 className="text-xs font-semibold text-[#F2F2F5] font-display">
+                  Link Geral da Marca {currentSelectedClientObj ? `(${currentSelectedClientObj.name})` : ''}
+                </h3>
+              </div>
+              <p className="text-xs text-[#92929F]">
+                Aprovação completa dos posts e carrosséis ({pendingCount} pendentes).
+              </p>
             </div>
-            <p className="text-xs text-[#92929F]">
-              Envie este link para seu cliente ver <strong className="text-[#F97316]">todos os {pendingCount} criativos pendentes</strong> em uma única tela e aprovar ou solicitar ajustes em lote.
-            </p>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => handleCopyGeneralLink()}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                  copiedGeneralLink
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-[#8B5CF6] hover:bg-[#7C3AED] text-white'
+                }`}
+              >
+                {copiedGeneralLink ? <Check size={14} /> : <Copy size={14} />}
+                <span>{copiedGeneralLink ? 'Link Copiado!' : 'Copiar Link da Central'}</span>
+              </button>
+
+              <button
+                onClick={() => handleShareGeneralWhatsApp()}
+                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-emerald-400 border border-[#24242D] transition-all cursor-pointer"
+                title="Enviar no WhatsApp"
+              >
+                <Share2 size={14} />
+              </button>
+
+              <button
+                onClick={() => handlePreviewGeneralHub(undefined, 'all')}
+                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-[#92929F] hover:text-[#F2F2F5] border border-[#24242D] transition-all cursor-pointer"
+                title="Visualizar como Cliente"
+              >
+                <ExternalLink size={14} />
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <button
-              onClick={() => handleCopyGeneralLink()}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
-                copiedGeneralLink
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-[#8B5CF6] hover:bg-[#7C3AED] text-white'
-              }`}
-            >
-              {copiedGeneralLink ? <Check size={14} /> : <Copy size={14} />}
-              <span>{copiedGeneralLink ? 'Link Geral Copiado!' : 'Copiar Link Geral da Central'}</span>
-            </button>
+          {/* GENERAL HUB: APROVAÇÃO DE LEGENDAS DA CENTRAL TODA */}
+          <div className="p-4 md:p-5 bg-gradient-to-r from-[#1b1712] to-[#17171F] rounded-xl border border-amber-500/25 flex flex-col justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold uppercase flex items-center gap-1">
+                  <AlignLeft size={11} />
+                  <span>Central Geral de Legendas</span>
+                </span>
+                <h3 className="text-xs font-semibold text-white font-display">
+                  Aprovação de Todas as Legendas
+                </h3>
+              </div>
+              <p className="text-xs text-zinc-400">
+                Gera um link exclusivo para o cliente aprovar todas as legendas e copys de uma vez só.
+              </p>
+            </div>
 
-            <button
-              onClick={() => handleShareGeneralWhatsApp()}
-              className="px-3.5 py-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-emerald-400 hover:text-emerald-300 border border-[#24242D] text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
-              title="Enviar Central Completa pelo WhatsApp"
-            >
-              <Share2 size={14} />
-              <span className="hidden sm:inline">Enviar no WhatsApp</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => handleCopyGeneralCaptionLink()}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                  copiedGeneralCaptionLink
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-amber-600 hover:bg-amber-500 text-white'
+                }`}
+              >
+                {copiedGeneralCaptionLink ? <Check size={14} /> : <Copy size={14} />}
+                <span>{copiedGeneralCaptionLink ? 'Link de Legendas Copiado!' : 'Copiar Link de Legendas da Central'}</span>
+              </button>
 
-            <button
-              onClick={() => handlePreviewGeneralHub()}
-              className="px-3.5 py-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-[#92929F] hover:text-[#F2F2F5] border border-[#24242D] text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
-              title="Visualizar a Central de Aprovação como o Cliente"
-            >
-              <ExternalLink size={14} />
-              <span className="hidden sm:inline">Visualizar como Cliente</span>
-            </button>
+              <button
+                onClick={() => handleShareGeneralCaptionWhatsApp()}
+                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-amber-400 border border-amber-500/30 transition-all cursor-pointer"
+                title="Enviar Legendas da Central no WhatsApp"
+              >
+                <Share2 size={14} />
+              </button>
+
+              <button
+                onClick={() => handlePreviewGeneralHub(undefined, 'caption')}
+                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-zinc-400 hover:text-white border border-[#24242D] transition-all cursor-pointer"
+                title="Visualizar Central de Legendas como Cliente"
+              >
+                <ExternalLink size={14} />
+              </button>
+            </div>
           </div>
+
         </div>
 
         {/* STATS COUNTERS BAR */}
@@ -639,9 +815,9 @@ export default function CreativeHubView({
           </div>
           <div className="bg-[#17171F] border border-amber-500/20 rounded-xl p-3.5">
             <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
-              <MessageSquare size={11} /> Ajustes Solicitados
+              <AlignLeft size={11} /> Com Legenda Cadastrada
             </span>
-            <div className="text-xl font-bold font-display text-amber-400">{changesCount}</div>
+            <div className="text-xl font-bold font-display text-amber-400">{totalWithCaption} <span className="text-xs text-zinc-500 font-normal">({missingCaptionsCount} sem legenda)</span></div>
           </div>
         </div>
       </div>
@@ -694,49 +870,67 @@ export default function CreativeHubView({
             onChange={(e) => setFilterStatus(e.target.value)}
             className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
           >
-            <option value="all">Todos os Status</option>
+            <option value="all">Status do Visual</option>
             <option value="pending_approval">⏳ Aguardando Aprovação</option>
             <option value="approved">🔵 Aprovados</option>
             <option value="changes_requested">⚠️ Ajustes Solicitados</option>
-            <option value="draft">📝 Rascunhos</option>
           </select>
+
+          {/* Caption Filter */}
+          <select
+            value={filterCaptionStatus}
+            onChange={(e) => setFilterCaptionStatus(e.target.value)}
+            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-amber-500/50 cursor-pointer"
+          >
+            <option value="all">Filtro de Legendas</option>
+            <option value="missing">⚠️ Sem Legenda (Adicionar)</option>
+            <option value="has_caption">✍️ Com Legenda</option>
+            <option value="pending_approval">⏳ Legendas Pendentes</option>
+            <option value="approved">✅ Legendas Aprovadas</option>
+          </select>
+
         </div>
       </div>
 
-      {/* 3. CREATIVES GRID LIST */}
+      {/* 3. CREATIVES GRID VIEW */}
       {filteredCreatives.length === 0 ? (
         <div className="bg-[#121218] border border-[#24242D] rounded-2xl p-12 text-center space-y-4">
-          <div className="w-14 h-14 rounded-2xl bg-[#17171F] border border-[#24242D] flex items-center justify-center text-[#A78BFA] mx-auto">
-            <ImageIcon size={28} />
+          <div className="w-16 h-16 rounded-2xl bg-[#17171F] border border-[#24242D] flex items-center justify-center text-[#686873] mx-auto">
+            <Layers size={32} />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-[#F2F2F5] font-display">Nenhum criativo encontrado</h3>
+            <h3 className="text-base font-semibold text-[#F2F2F5] font-display">Nenhum criativo encontrado</h3>
             <p className="text-xs text-[#92929F] max-w-sm mx-auto">
-              Suba seu primeiro carrossel de até 20 imagens ou vídeo para enviar o link de aprovação ao cliente.
+              Crie seu primeiro post em carrossel ou vídeo para enviar para aprovação do cliente.
             </p>
           </div>
           <button
             onClick={handleOpenCreateModal}
-            className="px-5 py-2.5 rounded-xl font-bold text-xs bg-white text-black hover:bg-zinc-100 transition-all cursor-pointer inline-flex items-center gap-2 shadow-sm"
+            className="px-4 py-2 rounded-xl bg-white hover:bg-zinc-100 text-black text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2"
           >
-            <Plus size={16} strokeWidth={2.5} />
-            <span>Criar Primeiro Criativo</span>
+            <Plus size={16} />
+            <span>Criar Primeiro Post</span>
           </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredCreatives.map((creative) => {
             const firstAsset = creative.assets?.[0];
-            const isCarousel = creative.format === 'carousel';
+            const isCarousel = creative.format === 'carousel' || (creative.assets || []).length > 1;
             const isVideo = creative.format === 'video' || firstAsset?.type === 'video';
             const isPending = creative.status === 'pending_approval' || creative.status === 'draft';
             const isApproved = creative.status === 'approved';
             const isChanges = creative.status === 'changes_requested';
 
+            const hasCaption = Boolean(creative.description?.trim());
+            const isCaptionPending = hasCaption && (creative.captionStatus === 'pending_approval' || !creative.captionStatus || creative.captionStatus === 'draft');
+            const isCaptionApproved = hasCaption && creative.captionStatus === 'approved';
+            const isCaptionChanges = hasCaption && creative.captionStatus === 'changes_requested';
+
             return (
               <div
                 key={creative.id}
-                className={`bg-[#121218] rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col group border ${
+                className={`bg-[#121218] rounded-2xl overflow-hidden border transition-all duration-200 flex flex-col group ${
                   isPending
                     ? 'border-[#F97316]/30 hover:border-[#F97316]/60'
                     : isApproved
@@ -748,7 +942,7 @@ export default function CreativeHubView({
               >
                 {/* CARD MEDIA THUMBNAIL */}
                 <div 
-                  onClick={() => handleViewAsClient(creative.shareToken)}
+                  onClick={() => handleViewAsClient(creative.shareToken, 'all')}
                   className="relative aspect-video bg-[#0B0B0F] flex items-center justify-center overflow-hidden cursor-pointer"
                 >
                   {firstAsset ? (
@@ -787,21 +981,21 @@ export default function CreativeHubView({
                     )}
                   </div>
 
-                  {/* STATUS BADGE */}
+                  {/* STATUS BADGE (VISUAL) */}
                   <div className="absolute top-3 right-3">
                     {isPending && (
                       <span className="px-2.5 py-1 rounded-full bg-[#F97316]/20 border border-[#F97316]/40 text-[#F97316] text-[10px] font-semibold flex items-center gap-1">
-                        <Clock size={12} /> Aguardando Aprovação
+                        <Clock size={12} /> Visual Pendente
                       </span>
                     )}
                     {isApproved && (
                       <span className="px-2.5 py-1 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Aprovado
+                        <CheckCircle2 size={12} /> Visual Aprovado
                       </span>
                     )}
                     {isChanges && (
                       <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-semibold flex items-center gap-1">
-                        <Clock size={12} /> Ajustes
+                        <Clock size={12} /> Ajustes no Visual
                       </span>
                     )}
                   </div>
@@ -809,28 +1003,67 @@ export default function CreativeHubView({
 
                 {/* CARD BODY */}
                 <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between text-[11px] font-mono text-[#686873]">
                       <span className="text-[#A78BFA] font-semibold uppercase">{creative.clientName || 'Cliente'}</span>
                       <span>{new Date(creative.createdAt).toLocaleDateString('pt-BR')}</span>
                     </div>
 
                     <h3 
-                      onClick={() => handleViewAsClient(creative.shareToken)}
+                      onClick={() => handleViewAsClient(creative.shareToken, 'all')}
                       className="font-semibold text-sm text-[#F2F2F5] line-clamp-1 group-hover:text-[#A78BFA] transition-colors cursor-pointer"
                     >
                       {creative.title}
                     </h3>
 
-                    {creative.description && (
-                      <p className="text-xs text-[#92929F] line-clamp-2 leading-relaxed">
-                        {creative.description}
-                      </p>
-                    )}
+                    {/* CAPTION PILL / QUICK BUTTON */}
+                    <div className="pt-1">
+                      {hasCaption ? (
+                        <div className="p-2.5 bg-[#17171F] border border-[#24242D] rounded-xl space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className={`text-[10px] font-mono font-bold flex items-center gap-1 ${
+                              isCaptionApproved
+                                ? 'text-emerald-400'
+                                : isCaptionChanges
+                                ? 'text-amber-400'
+                                : 'text-orange-400'
+                            }`}>
+                              <AlignLeft size={11} />
+                              <span>{isCaptionApproved ? 'Legenda Aprovada' : isCaptionChanges ? 'Ajuste na Legenda' : 'Legenda Pendente'}</span>
+                            </span>
+
+                            <button
+                              onClick={() => handleOpenCaptionEditor(creative)}
+                              className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 size={11} />
+                              <span>Editar Copy</span>
+                            </button>
+                          </div>
+                          <p className="text-xs text-[#92929F] line-clamp-2 leading-relaxed font-sans">
+                            {creative.description}
+                          </p>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleOpenCaptionEditor(creative)}
+                          className="w-full p-2.5 bg-amber-500/10 hover:bg-amber-500/15 border border-dashed border-amber-500/30 rounded-xl text-[11px] text-amber-400 flex items-center justify-center gap-1.5 transition-all cursor-pointer font-medium"
+                        >
+                          <Plus size={13} />
+                          <span>Adicionar Legenda / Gerar Link de Legenda</span>
+                        </button>
+                      )}
+                    </div>
 
                     {creative.clientFeedback && (
                       <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
-                        💬 "{creative.clientFeedback}"
+                        💬 Visual: "{creative.clientFeedback}"
+                      </div>
+                    )}
+
+                    {creative.captionFeedback && (
+                      <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
+                        ✍️ Legenda: "{creative.captionFeedback}"
                       </div>
                     )}
                   </div>
@@ -838,63 +1071,86 @@ export default function CreativeHubView({
                   {/* CARD ACTIONS */}
                   <div className="pt-3 border-t border-[#24242D] space-y-2">
                     
-                    {/* Individual Post Approval Link Actions */}
-                    <div className="flex items-center gap-2">
+                    {/* Link Actions row */}
+                    <div className="grid grid-cols-2 gap-2">
+                      
+                      {/* Post Approval Link */}
                       <button
                         onClick={() => handleCopyLink(creative.shareToken)}
-                        className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                        className={`py-1.5 px-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
                           copiedToken === creative.shareToken
                             ? 'bg-emerald-600 text-white'
                             : 'bg-[#17171F] hover:bg-[#20202B] text-[#F2F2F5] border border-[#24242D]'
                         }`}
-                        title="Copiar link de aprovação individual deste post"
+                        title="Copiar link de aprovação completa do post"
                       >
-                        {copiedToken === creative.shareToken ? (
-                          <>
-                            <Check size={13} />
-                            <span>Link Individual Copiado</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy size={13} />
-                            <span>Copiar Link Individual</span>
-                          </>
-                        )}
+                        {copiedToken === creative.shareToken ? <Check size={12} /> : <Copy size={12} />}
+                        <span className="truncate">{copiedToken === creative.shareToken ? 'Copiado!' : 'Link Completo'}</span>
                       </button>
 
+                      {/* Caption Approval Link */}
                       <button
-                        onClick={() => handleShareWhatsApp(creative)}
-                        className="p-2 rounded-xl bg-[#17171F] hover:bg-emerald-500/20 text-emerald-400 border border-[#24242D] transition-all cursor-pointer flex-shrink-0"
-                        title="Enviar este post pelo WhatsApp"
+                        onClick={() => {
+                          if (!hasCaption) {
+                            handleOpenCaptionEditor(creative);
+                          } else {
+                            handleCopyCaptionLink(creative.shareToken);
+                          }
+                        }}
+                        className={`py-1.5 px-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                          copiedCaptionToken === creative.shareToken
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-[#1b1712] hover:bg-[#251f18] text-amber-400 border border-amber-500/30'
+                        }`}
+                        title="Copiar link focado na aprovação da legenda"
                       >
-                        <Share2 size={14} />
+                        {copiedCaptionToken === creative.shareToken ? <Check size={12} /> : <AlignLeft size={12} />}
+                        <span className="truncate">{copiedCaptionToken === creative.shareToken ? 'Copiado!' : 'Link Legenda'}</span>
                       </button>
 
-                      <button
-                        onClick={() => handleViewAsClient(creative.shareToken)}
-                        className="p-2 rounded-xl bg-[#17171F] hover:bg-[#20202B] text-[#92929F] hover:text-[#F2F2F5] border border-[#24242D] transition-all cursor-pointer flex-shrink-0"
-                        title="Visualizar este post como Cliente"
-                      >
-                        <ExternalLink size={14} />
-                      </button>
                     </div>
 
-                    {/* Edit and Delete buttons */}
-                    <div className="flex items-center justify-end gap-1.5 text-[#686873] pt-1">
-                      <button
-                        onClick={() => handleOpenEditModal(creative)}
-                        className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
-                      >
-                        <Edit3 size={13} />
-                        <span>Editar</span>
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCreative(creative.id)}
-                        className="p-1.5 rounded-lg hover:bg-red-500/10 hover:text-red-400 transition-all cursor-pointer text-xs flex items-center gap-1"
-                      >
-                        <Trash2 size={13} />
-                        <span>Excluir</span>
-                      </button>
+                    {/* Secondary WhatsApp and Preview row */}
+                    <div className="flex items-center justify-between text-[#686873] pt-1">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleShareWhatsApp(creative)}
+                          className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer text-xs flex items-center gap-1"
+                          title="WhatsApp do Post"
+                        >
+                          <Share2 size={13} />
+                          <span className="text-[11px]">Zap Post</span>
+                        </button>
+
+                        {hasCaption && (
+                          <button
+                            onClick={() => handleShareCaptionWhatsApp(creative)}
+                            className="p-1.5 rounded-lg hover:bg-amber-500/20 text-amber-400 transition-all cursor-pointer text-xs flex items-center gap-1"
+                            title="WhatsApp da Legenda"
+                          >
+                            <MessageSquare size={13} />
+                            <span className="text-[11px]">Zap Legenda</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleOpenEditModal(creative)}
+                          className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
+                          title="Editar post completo"
+                        >
+                          <Edit3 size={13} />
+                          <span>Editar</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCreative(creative.id)}
+                          className="p-1.5 rounded-lg hover:bg-red-500/10 hover:text-red-400 transition-all cursor-pointer text-xs"
+                          title="Excluir"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
 
                   </div>
@@ -905,7 +1161,145 @@ export default function CreativeHubView({
         </div>
       )}
 
-      {/* 4. MODAL FOR CREATING / EDITING CREATIVE (ENFASE MÁXIMA EM CARROSSEL & VÍDEO) */}
+      {/* ========================================================================= */}
+      {/* 4. QUICK CAPTION & COPY MANAGER MODAL                                     */}
+      {/* ========================================================================= */}
+      {isCaptionModalOpen && captionModalCreative && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-[#14141f] border border-amber-500/30 max-w-2xl w-full rounded-3xl p-6 md:p-8 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto"
+          >
+            {/* MODAL HEADER */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400">
+                  <AlignLeft size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-display">
+                    Gerenciador de Legenda & Copywriting
+                  </h3>
+                  <span className="text-xs text-zinc-400 block truncate max-w-sm">
+                    Post: {captionModalCreative.title} ({captionModalCreative.clientName || 'Cliente'})
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCaptionModalOpen(false)}
+                className="text-zinc-500 hover:text-white p-1 rounded-xl transition-colors cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* AI GENERATOR TRIGGER */}
+            <div className="p-4 bg-gradient-to-r from-purple-950/40 via-[#171722] to-amber-950/40 border border-purple-500/25 rounded-2xl space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-purple-400 animate-pulse" />
+                  <span className="text-xs font-bold text-white">Criar / Aprimorar Legenda com Inteligência Artificial</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateAICaption}
+                  disabled={isGeneratingAICaption}
+                  className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-purple-600/20"
+                >
+                  <Wand2 size={13} />
+                  <span>{isGeneratingAICaption ? 'Gerando Legenda...' : '✨ Gerar Legenda com IA'}</span>
+                </button>
+              </div>
+
+              {/* TONE & GOAL SELECTORS */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-400 block mb-1">Tom de Voz:</label>
+                  <select
+                    value={aiTone}
+                    onChange={(e) => setAiTone(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-1.5 text-xs text-zinc-200 focus:outline-none"
+                  >
+                    <option value="persuasivo e envolvente">Persuasivo & Envolvente</option>
+                    <option value="educativo e didático">Educativo & Didático</option>
+                    <option value="autoridade e especialista">Autoridade & Especialista</option>
+                    <option value="descontraído e dinâmico">Descontraído & Dinâmico</option>
+                    <option value="direto e minimalista">Direto & Minimalista</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-zinc-400 block mb-1">Objetivo:</label>
+                  <select
+                    value={aiGoal}
+                    onChange={(e) => setAiGoal(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-1.5 text-xs text-zinc-200 focus:outline-none"
+                  >
+                    <option value="engajamento e comentários">Engajamento & Comentários</option>
+                    <option value="salvamentos e compartilhamentos">Salvamentos & Compartilhamento</option>
+                    <option value="vendas e clique na bio">Vendas & CTA na Bio / Direct</option>
+                    <option value="geração de leads">Geração de Leads</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* TEXTAREA FOR CAPTION */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-zinc-200 block">
+                  Texto da Legenda / Copy Completo:
+                </label>
+                <span className="text-[11px] font-mono text-zinc-500">
+                  {captionText.length} caracteres
+                </span>
+              </div>
+
+              <textarea
+                value={captionText}
+                onChange={(e) => setCaptionText(e.target.value)}
+                placeholder="Escreva ou cole a legenda do post com ganchos, quebras de linha e hashtags..."
+                className="w-full h-44 p-4 rounded-2xl bg-zinc-950 border border-zinc-800 focus:border-amber-500 focus:outline-none text-xs text-white placeholder-zinc-600 resize-none font-sans leading-relaxed"
+              />
+            </div>
+
+            {/* ACTIONS FOOTER */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-3 border-t border-zinc-800">
+              <button
+                onClick={() => setIsCaptionModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-400 hover:text-white transition-all cursor-pointer text-center"
+              >
+                Cancelar
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSaveCaption(false)}
+                  disabled={isSavingCaption}
+                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-200 transition-all cursor-pointer text-center"
+                >
+                  {isSavingCaption ? 'Salvando...' : 'Salvar Legenda'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSaveCaption(true)}
+                  disabled={isSavingCaption || !captionText.trim()}
+                  className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-500 hover:from-amber-500 hover:to-orange-400 text-xs font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <Copy size={14} />
+                  <span>{isSavingCaption ? 'Salvando...' : 'Salvar e Copiar Link de Aprovação'}</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 5. MODAL FOR CREATING / EDITING FULL CREATIVE (CAROUSEL & VIDEO)          */}
+      {/* ========================================================================= */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
           <motion.div
@@ -1000,8 +1394,8 @@ export default function CreativeHubView({
                       }`}
                     >
                       <Layers size={18} className="mx-auto mb-1 text-purple-400" />
-                      <span className="text-[11px] block">Carrossel</span>
-                      <span className="text-[9px] text-zinc-500">Até 20 imgs</span>
+                      <span className="text-xs block">Carrossel</span>
+                      <span className="text-[10px] text-zinc-500 block">Até 20 slides</span>
                     </button>
 
                     <button
@@ -1014,8 +1408,8 @@ export default function CreativeHubView({
                       }`}
                     >
                       <Film size={18} className="mx-auto mb-1 text-orange-400" />
-                      <span className="text-[11px] block">Vídeo</span>
-                      <span className="text-[9px] text-zinc-500">Até 15GB</span>
+                      <span className="text-xs block">Vídeo / Reel</span>
+                      <span className="text-[10px] text-zinc-500 block">Até 15GB</span>
                     </button>
 
                     <button
@@ -1028,8 +1422,8 @@ export default function CreativeHubView({
                       }`}
                     >
                       <ImageIcon size={18} className="mx-auto mb-1 text-blue-400" />
-                      <span className="text-[11px] block">Imagem</span>
-                      <span className="text-[9px] text-zinc-500">Única</span>
+                      <span className="text-xs block">Imagem Única</span>
+                      <span className="text-[10px] text-zinc-500 block">Post estático</span>
                     </button>
                   </div>
                 </div>
@@ -1037,17 +1431,17 @@ export default function CreativeHubView({
                 {/* Aspect Ratio */}
                 <div>
                   <label className="block text-[11px] font-mono uppercase font-bold text-zinc-400 mb-1.5">
-                    Proporção de Visualização
+                    Proporção da Imagem
                   </label>
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-4 gap-2">
                     {(['1:1', '4:5', '9:16', '16:9'] as const).map(ratio => (
                       <button
                         key={ratio}
                         type="button"
                         onClick={() => setFormAspectRatio(ratio)}
-                        className={`flex-1 py-2 rounded-xl text-xs font-mono font-bold border transition-all cursor-pointer ${
+                        className={`py-2 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
                           formAspectRatio === ratio
-                            ? 'bg-zinc-800 border-purple-500 text-purple-400'
+                            ? 'bg-purple-600 text-white border-purple-500'
                             : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
                         }`}
                       >
@@ -1060,159 +1454,128 @@ export default function CreativeHubView({
                 {/* Caption / Description */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-[11px] font-mono uppercase font-bold text-zinc-400">
-                      Legenda / Copy do Post
+                    <label className="text-[11px] font-mono uppercase font-bold text-zinc-400 flex items-center gap-1">
+                      <AlignLeft size={12} className="text-amber-400" />
+                      <span>Legenda / Copy (Opcional)</span>
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsAIModalOpen(true)}
-                      className="text-[11px] font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Gerar sugestão de copy e carrossel com IA"
-                    >
-                      <Sparkles size={12} className="text-purple-400" />
-                      <span>Gerar com IA</span>
-                    </button>
+                    <span className="text-[10px] text-zinc-500">Pode adicionar agora ou depois</span>
                   </div>
                   <textarea
-                    rows={4}
-                    placeholder="Digite a legenda sugerida para o post..."
+                    placeholder="Cole ou digite a legenda do post (ou adicione depois para aprovação de legenda)..."
                     value={formDescription}
                     onChange={(e) => setFormDescription(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-purple-500 transition-all resize-none"
+                    rows={4}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-purple-500 resize-none"
                   />
                 </div>
 
               </div>
 
-              {/* RIGHT: UPLOAD & CAROUSEL REORDER ZONE (ENFASE MÁXIMA!) */}
+              {/* RIGHT: FILE UPLOAD & SLIDE REORDERING */}
               <div className="space-y-4">
+                
                 <div className="flex items-center justify-between">
                   <label className="text-[11px] font-mono uppercase font-bold text-zinc-400">
-                    {formFormat === 'carousel' ? `Imagens do Carrossel (${formAssets.length}/20)` : 'Mídia do Criativo'}
+                    Arquivos do Criativo ({formAssets.length}/20) *
                   </label>
-                  <span className="text-[10px] text-purple-400 font-mono">
-                    {formFormat === 'carousel' ? 'Arraste ou ordene os slides' : 'Vídeos de até 15GB'}
+                  <span className="text-[10px] text-zinc-500">
+                    {formFormat === 'carousel' ? 'Arraste ou use as setas para ordenar' : 'Vídeos de até 15GB suportados'}
                   </span>
                 </div>
 
                 {/* UPLOAD DROPZONE */}
                 <div
-                  onClick={() => !isProcessingFiles && fileInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-3xl p-6 text-center transition-all ${
-                    isProcessingFiles
-                      ? 'border-purple-500 bg-purple-950/20 cursor-wait'
-                      : 'border-zinc-800 hover:border-purple-500/50 bg-zinc-950/60 cursor-pointer hover:bg-purple-950/10 group'
-                  }`}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-zinc-800 hover:border-purple-500/50 bg-zinc-900/50 rounded-2xl p-6 text-center transition-all cursor-pointer group"
                 >
                   <input
-                    type="file"
                     ref={fileInputRef}
-                    onChange={handleFileUpload}
+                    type="file"
                     multiple={formFormat === 'carousel'}
                     accept={formFormat === 'video' ? 'video/*' : 'image/*,video/*'}
+                    onChange={handleFileUpload}
                     className="hidden"
                   />
-                  <div className="w-12 h-12 rounded-2xl bg-purple-500/10 group-hover:bg-purple-500/20 text-purple-400 flex items-center justify-center mx-auto mb-2 transition-all">
+                  <div className="w-12 h-12 rounded-2xl bg-zinc-800 group-hover:bg-purple-600/20 text-zinc-400 group-hover:text-purple-400 flex items-center justify-center mx-auto mb-2 transition-all">
                     {isProcessingFiles ? (
-                      <RefreshCw size={22} className="animate-spin text-purple-400" />
+                      <RefreshCw size={22} className="animate-spin" />
                     ) : (
                       <Upload size={22} />
                     )}
                   </div>
-                  <p className="text-xs font-bold text-white">
-                    {isProcessingFiles
-                      ? 'Otimizando e preparando imagens...'
-                      : `Clique ou arraste ${formFormat === 'carousel' ? 'até 20 imagens' : 'seus arquivos'} aqui`}
+                  <p className="text-xs font-bold text-white mb-0.5">
+                    {isProcessingFiles ? 'Processando arquivos...' : 'Clique para selecionar imagens ou vídeos'}
                   </p>
-                  <p className="text-[10px] text-zinc-500 mt-1">
-                    {formFormat === 'carousel' ? 'PNG, JPG, WEBP • O cliente verá em formato carrossel real' : 'Suporta arquivos de alta resolução até 15GB'}
+                  <p className="text-[11px] text-zinc-500">
+                    {formFormat === 'carousel'
+                      ? 'Selecione até 20 imagens de uma vez só para montar o carrossel'
+                      : 'Suporte a MP4, MOV, WEBM e imagens de alta resolução'}
                   </p>
                 </div>
 
-                {/* CAROUSEL SLIDES REORDER LIST */}
+                {/* SLIDES PREVIEW & REORDER LIST */}
                 {formAssets.length > 0 && (
                   <div className="space-y-2">
-                    <span className="text-[10px] font-mono uppercase font-bold text-zinc-500 block">
-                      Organizar Ordem das Imagens
+                    <span className="text-[11px] font-mono text-zinc-400 block">
+                      Ordenação dos Slides ({formAssets.length} itens):
                     </span>
 
-                    <div className="max-h-56 overflow-y-auto space-y-2 pr-1 scrollbar-thin">
-                      {formAssets.map((asset, index) => (
+                    <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 bg-zinc-950/60 rounded-2xl border border-zinc-800">
+                      {formAssets.map((asset, idx) => (
                         <div
-                          key={asset.id || index}
-                          className={`p-2 rounded-2xl bg-zinc-900 border flex items-center justify-between gap-3 transition-all ${
-                            previewSlideIndex === index ? 'border-purple-500 bg-purple-950/20' : 'border-zinc-800'
+                          key={asset.id || idx}
+                          className={`relative aspect-square rounded-xl overflow-hidden border-2 group ${
+                            idx === previewSlideIndex ? 'border-purple-500' : 'border-zinc-800'
                           }`}
                         >
-                          <div className="flex items-center gap-2.5 overflow-hidden">
-                            {/* Slide Number Badge */}
-                            <span className="w-6 h-6 rounded-lg bg-zinc-800 text-zinc-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
-                              {index + 1}
-                            </span>
+                          <img
+                            src={asset.url}
+                            alt={`Slide ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                          <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono font-bold text-white">
+                            {idx + 1}
+                          </span>
 
-                            {/* Thumbnail */}
-                            <div 
-                              onClick={() => setPreviewSlideIndex(index)}
-                              className="w-10 h-10 rounded-xl overflow-hidden bg-black shrink-0 cursor-pointer border border-zinc-700"
-                            >
-                              {asset.type === 'video' ? (
-                                <video src={asset.url} className="w-full h-full object-cover" />
-                              ) : (
-                                <img src={asset.url} alt={asset.name} className="w-full h-full object-cover" />
-                              )}
-                            </div>
-
-                            <div className="truncate">
-                              <p className="text-xs font-medium text-white truncate max-w-[140px]">
-                                {asset.name}
-                              </p>
-                              <span className="text-[9px] text-zinc-500 font-mono">
-                                {index === 0 ? '⭐ Capa do Carrossel' : `Slide ${index + 1}`}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* REORDER BUTTONS */}
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleMoveSlideLeft(index)}
-                              disabled={index === 0}
-                              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 text-zinc-300 hover:text-white transition-all cursor-pointer"
-                              title="Mover para a esquerda / anterior"
-                            >
-                              <ArrowLeft size={12} />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleMoveSlideRight(index)}
-                              disabled={index === formAssets.length - 1}
-                              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 text-zinc-300 hover:text-white transition-all cursor-pointer"
-                              title="Mover para a direita / próximo"
-                            >
-                              <ArrowRight size={12} />
-                            </button>
-
-                            {index !== 0 && (
+                          {/* REORDER / DELETE ACTIONS OVERLAY */}
+                          <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                            {idx > 0 && (
                               <button
                                 type="button"
-                                onClick={() => handleSetAsCover(index)}
-                                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-purple-600 text-zinc-300 hover:text-white transition-all cursor-pointer"
-                                title="Definir como Capa (Slide 1)"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMoveAsset(idx, 'left');
+                                }}
+                                className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px]"
+                                title="Mover para esquerda"
                               >
-                                <Star size={12} />
+                                ◀
                               </button>
                             )}
-
                             <button
                               type="button"
-                              onClick={() => handleDeleteSlide(index)}
-                              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 transition-all cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveAsset(idx);
+                              }}
+                              className="p-1 rounded bg-red-600 hover:bg-red-500 text-white text-[10px]"
                               title="Remover slide"
                             >
-                              <Trash2 size={12} />
+                              ✕
                             </button>
+                            {idx < formAssets.length - 1 && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMoveAsset(idx, 'right');
+                                }}
+                                className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px]"
+                                title="Mover para direita"
+                              >
+                                ▶
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1221,28 +1584,25 @@ export default function CreativeHubView({
                 )}
 
               </div>
+
             </div>
 
-            {/* MODAL ACTIONS FOOTER */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-zinc-800/80">
-              <p className="text-xs text-zinc-500 text-center sm:text-left">
-                O cliente receberá um link limpo e intuitivo para aprovar o carrossel/vídeo diretamente.
-              </p>
+            {/* MODAL FOOTER */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-zinc-800/80">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-400 hover:text-white transition-all cursor-pointer text-center"
+              >
+                Cancelar
+              </button>
 
-              <div className="flex items-center gap-3 w-full sm:w-auto">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-semibold text-zinc-400 hover:text-white transition-all cursor-pointer"
-                >
-                  Cancelar
-                </button>
-
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleSaveCreative('draft')}
                   disabled={isSaving}
-                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-xs font-bold text-zinc-200 hover:text-white transition-all cursor-pointer"
+                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-200 transition-all cursor-pointer text-center"
                 >
                   Salvar Rascunho
                 </button>
@@ -1263,13 +1623,21 @@ export default function CreativeHubView({
         </div>
       )}
 
-      {/* 5. IN-APP CLIENT APPROVAL PREVIEW MODAL (PREVENTS CONNECTION REFUSED / POPUP BLOCKING) */}
+      {/* ========================================================================= */}
+      {/* 6. IN-APP CLIENT APPROVAL PREVIEW MODAL                                   */}
+      {/* ========================================================================= */}
       {(previewingShareToken || previewingHubClientId) && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col">
           <div className="bg-[#121218] border-b border-zinc-800 px-6 py-3 flex items-center justify-between z-50">
             <div className="flex items-center gap-3">
-              <span className="px-2.5 py-1 rounded-full bg-purple-500/10 border border-purple-500/20 text-[11px] font-mono font-bold text-purple-400">
-                {previewingHubClientId ? 'Central Geral do Cliente (Pré-visualização)' : 'Criativo Individual (Pré-visualização)'}
+              <span className={`px-2.5 py-1 rounded-full text-[11px] font-mono font-bold ${
+                previewingFocus === 'caption'
+                  ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
+                  : 'bg-purple-500/10 border border-purple-500/20 text-purple-400'
+              }`}>
+                {previewingHubClientId 
+                  ? (previewingFocus === 'caption' ? 'Central Geral de Legendas (Pré-visualização)' : 'Central Geral do Cliente (Pré-visualização)')
+                  : (previewingFocus === 'caption' ? 'Aprovação de Legenda (Pré-visualização)' : 'Criativo Individual (Pré-visualização)')}
               </span>
               <p className="text-xs text-zinc-400 hidden sm:block">
                 Esta é a visualização exata que seu cliente terá ao abrir o link.
@@ -1280,8 +1648,8 @@ export default function CreativeHubView({
               <button
                 onClick={async () => {
                   const url = previewingHubClientId
-                    ? `${window.location.origin}/aprovar?client=${previewingHubClientId}&mode=hub`
-                    : `${window.location.origin}/aprovar?creativeToken=${previewingShareToken}`;
+                    ? `${window.location.origin}/aprovar?client=${previewingHubClientId}&mode=hub${previewingFocus === 'caption' ? '&focus=caption' : ''}`
+                    : `${window.location.origin}/aprovar?creativeToken=${previewingShareToken}${previewingFocus === 'caption' ? '&focus=caption' : ''}`;
                   const success = await copyToClipboard(url);
                   if (success) {
                     if (previewingShareToken) setCopiedToken(previewingShareToken);
@@ -1318,6 +1686,7 @@ export default function CreativeHubView({
               shareToken={previewingShareToken || undefined}
               clientToken={previewingHubClientId || undefined}
               initialMode={previewingHubClientId ? 'hub' : 'single'}
+              initialFocus={previewingFocus}
               onBackToApp={() => {
                 setPreviewingShareToken(null);
                 setPreviewingHubClientId(null);
@@ -1327,7 +1696,7 @@ export default function CreativeHubView({
         </div>
       )}
 
-      {/* 5. DESIGNER CAROUSEL AI GENERATOR MODAL */}
+      {/* 7. DESIGNER CAROUSEL AI GENERATOR MODAL */}
       <DesignerCarouselAIModal
         isOpen={isAIModalOpen}
         onClose={() => setIsAIModalOpen(false)}

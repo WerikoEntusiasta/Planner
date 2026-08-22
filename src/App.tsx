@@ -1196,17 +1196,19 @@ export default function App() {
   const approvePostId = queryParams.get('approvePostId');
   const creativeToken = queryParams.get('creativeToken') || queryParams.get('shareToken') || queryParams.get('token');
   const clientApprovalToken = queryParams.get('clientToken') || queryParams.get('client') || queryParams.get('clientId');
-  const isGeneralHubMode = queryParams.get('mode') === 'hub' || window.location.pathname.includes('/aprovar-criativos') || window.location.pathname.includes('/central-aprovacao');
-  const isCreativeApprovalUrl = window.location.pathname.includes('/aprovar-criativo') || 
+  const isCaptionFocus = queryParams.get('focus') === 'caption' || queryParams.get('type') === 'caption' || window.location.pathname.includes('/aprovar-legenda') || window.location.pathname.includes('/aprovar-legendas');
+  const isGeneralHubMode = queryParams.get('mode') === 'hub' || window.location.pathname.includes('/aprovar-criativos') || window.location.pathname.includes('/central-aprovacao') || window.location.pathname.includes('/aprovar-legendas');
+  const isCreativeApprovalUrl = window.location.pathname.includes('/aprovar-criativo') || window.location.pathname.includes('/aprovar-legenda') ||
     (window.location.pathname.includes('/aprovar') && (creativeToken || clientApprovalToken || isGeneralHubMode));
 
-  // Creative Client Approval Portal (Supports Single Creative & General Hub for All Creatives)
+  // Creative Client Approval Portal (Supports Single Creative & General Hub for All Creatives + Caption Approval)
   if (creativeToken || clientApprovalToken || isCreativeApprovalUrl || isGeneralHubMode) {
     return (
       <ClientCreativeApprovalPage 
         shareToken={creativeToken || ''} 
         clientToken={clientApprovalToken || ''}
         initialMode={isGeneralHubMode || Boolean(clientApprovalToken) ? 'hub' : 'single'}
+        initialFocus={isCaptionFocus ? 'caption' : 'all'}
         onBackToApp={currentUser ? () => {
           window.history.replaceState({}, '', '/');
           window.location.reload();

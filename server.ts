@@ -883,6 +883,9 @@ function initDatabase() {
   ensureColumn('posts', 'approvalFeedback', 'TEXT');
   ensureColumn('posts', 'approvalDate', 'TEXT');
   ensureColumn('goals', 'userId', 'TEXT');
+  ensureColumn('creatives', 'captionStatus', 'TEXT');
+  ensureColumn('creatives', 'captionFeedback', 'TEXT');
+  ensureColumn('creatives', 'captionApprovalDate', 'TEXT');
 
   db.prepare(`
     CREATE TABLE IF NOT EXISTS cancellation_attempts (
@@ -2117,6 +2120,9 @@ app.post('/api/creatives', async (req, res) => {
       format,
       platform,
       status,
+      captionStatus,
+      captionFeedback,
+      captionApprovalDate,
       assets,
       aspectRatio,
       shareToken,
@@ -2147,6 +2153,9 @@ app.post('/api/creatives', async (req, res) => {
           format = ?,
           platform = ?,
           status = ?,
+          captionStatus = ?,
+          captionFeedback = ?,
+          captionApprovalDate = ?,
           assets = ?,
           aspectRatio = ?,
           clientFeedback = ?,
@@ -2161,6 +2170,9 @@ app.post('/api/creatives', async (req, res) => {
         format || 'carousel',
         platform || 'instagram',
         status || 'draft',
+        captionStatus || null,
+        captionFeedback || null,
+        captionApprovalDate || null,
         assetsJson,
         aspectRatio || '1:1',
         clientFeedback || null,
@@ -2174,9 +2186,9 @@ app.post('/api/creatives', async (req, res) => {
       db.prepare(`
         INSERT INTO creatives (
           id, userId, clientId, clientName, title, description, format, platform,
-          status, assets, aspectRatio, shareToken, clientFeedback, approvalDate,
+          status, captionStatus, captionFeedback, captionApprovalDate, assets, aspectRatio, shareToken, clientFeedback, approvalDate,
           createdAt, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         creativeId,
         workspaceOwnerId,
@@ -2187,6 +2199,9 @@ app.post('/api/creatives', async (req, res) => {
         format || 'carousel',
         platform || 'instagram',
         status || 'draft',
+        captionStatus || (description ? 'pending_approval' : null),
+        captionFeedback || null,
+        captionApprovalDate || null,
         assetsJson,
         aspectRatio || '1:1',
         creativeShareToken,
@@ -2322,7 +2337,7 @@ app.get('/api/creatives/public-hub/:clientId', (req, res) => {
 // 4.2 Batch approval endpoint for multiple creatives in the client hub (No Auth Required)
 app.post('/api/creatives/public-hub/batch-feedback', (req, res) => {
   try {
-    const { creativeIds, status, feedback } = req.body;
+    const { creativeIds, status, feedback, targetType } = req.body;
 
     if (!Array.isArray(creativeIds) || creativeIds.length === 0 || !status) {
       return res.status(400).json({ success: false, error: 'Lista de criativos e status são obrigatórios' });
@@ -2332,14 +2347,25 @@ app.post('/api/creatives/public-hub/batch-feedback', (req, res) => {
     const formattedDate = new Date().toLocaleDateString('pt-BR');
     let updatedCount = 0;
 
-    const updateStmt = db.prepare(`
-      UPDATE creatives SET
-        status = ?,
-        clientFeedback = ?,
-        approvalDate = ?,
-        updatedAt = ?
-      WHERE id = ? OR shareToken = ?
-    `);
+    const isCaptionTarget = targetType === 'caption';
+
+    const updateStmt = isCaptionTarget
+      ? db.prepare(`
+          UPDATE creatives SET
+            captionStatus = ?,
+            captionFeedback = ?,
+            captionApprovalDate = ?,
+            updatedAt = ?
+          WHERE id = ? OR shareToken = ?
+        `)
+      : db.prepare(`
+          UPDATE creatives SET
+            status = ?,
+            clientFeedback = ?,
+            approvalDate = ?,
+            updatedAt = ?
+          WHERE id = ? OR shareToken = ?
+        `);
 
     for (const cid of creativeIds) {
       const result = updateStmt.run(
@@ -2355,13 +2381,14 @@ app.post('/api/creatives/public-hub/batch-feedback', (req, res) => {
         io.emit('creative-status-updated', {
           creativeId: cid,
           status,
+          targetType: isCaptionTarget ? 'caption' : 'all',
           feedback: feedback || '',
           approvalDate: formattedDate
         });
       }
     }
 
-    res.json({ success: true, updatedCount, message: `${updatedCount} criativo(s) atualizados com sucesso!` });
+    res.json({ success: true, updatedCount, message: `${updatedCount} ${isCaptionTarget ? 'legenda(s)' : 'criativo(s)'} atualizados com sucesso!` });
   } catch (err: any) {
     console.error('Error in POST /api/creatives/public-hub/batch-feedback:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -2372,7 +2399,7 @@ app.post('/api/creatives/public-hub/batch-feedback', (req, res) => {
 app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
   try {
     const { shareToken } = req.params;
-    const { status, feedback } = req.body;
+    const { status, feedback, targetType } = req.body;
 
     if (!shareToken || !status) {
       return res.status(400).json({ success: false, error: 'Status e Token de aprovação são obrigatórios' });
@@ -2385,25 +2412,44 @@ app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
 
     const now = new Date().toISOString();
     const formattedDate = new Date().toLocaleDateString('pt-BR');
+    const isCaptionTarget = targetType === 'caption';
 
-    db.prepare(`
-      UPDATE creatives SET
-        status = ?,
-        clientFeedback = ?,
-        approvalDate = ?,
-        updatedAt = ?
-      WHERE id = ?
-    `).run(
-      status,
-      feedback || null,
-      formattedDate,
-      now,
-      row.id
-    );
+    if (isCaptionTarget) {
+      db.prepare(`
+        UPDATE creatives SET
+          captionStatus = ?,
+          captionFeedback = ?,
+          captionApprovalDate = ?,
+          updatedAt = ?
+        WHERE id = ?
+      `).run(
+        status,
+        feedback || null,
+        formattedDate,
+        now,
+        row.id
+      );
+    } else {
+      db.prepare(`
+        UPDATE creatives SET
+          status = ?,
+          clientFeedback = ?,
+          approvalDate = ?,
+          updatedAt = ?
+        WHERE id = ?
+      `).run(
+        status,
+        feedback || null,
+        formattedDate,
+        now,
+        row.id
+      );
+    }
 
     io.emit('creative-status-updated', {
       creativeId: row.id,
       status,
+      targetType: isCaptionTarget ? 'caption' : 'all',
       feedback: feedback || '',
       approvalDate: formattedDate
     });
@@ -2537,6 +2583,73 @@ Retorne ESTRITAMENTE um objeto JSON válido no seguinte formato:
   } catch (err: any) {
     console.error('Error in /api/ai/carousel-generator:', err);
     res.status(500).json({ success: false, error: err.message || 'Erro ao gerar textos para o carrossel.' });
+  }
+});
+
+// 🤖 AI CAPTION & COPYWRITING GENERATOR (GEMINI 3.7 FLASH)
+app.post('/api/ai/caption-generator', async (req, res) => {
+  try {
+    const { title, clientName, platform = 'instagram', format = 'carousel', tone = 'persuasivo e envolvente', goal = 'engajamento e conversão', existingCaption = '' } = req.body;
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ success: false, error: 'O título ou tema do criativo é obrigatório.' });
+    }
+
+    const systemPrompt = `Você é um Copywriter Sênior especializado em mídias sociais (Instagram, Facebook, LinkedIn, TikTok).
+Crie uma legenda/copy completa e de alto engajamento para a seguinte publicação:
+Título / Tema: "${title.trim()}"
+Marca / Cliente: "${clientName || 'Marca'}"
+Plataforma: "${platform}"
+Formato do Criativo: "${format}"
+Tom de Voz: "${tone}"
+Objetivo: "${goal}"
+${existingCaption ? `Legenda Atual (para aprimorar ou reescrever): "${existingCaption}"` : ''}
+
+Estrutura da Legenda:
+1. Gancho inicial irresistível na primeira linha (para fazer a pessoa clicar em "mais...").
+2. Desenvolvimento fluido, escaneável e com espaçamentos adequados e emojis equilibrados.
+3. Chamada para Ação (CTA) clara (salvar, compartilhar, comentar ou direct).
+4. Bloco de 5 a 8 hashtags altamente relevantes no final.
+
+Retorne ESTRITAMENTE um objeto JSON válido:
+{
+  "hook": "Gancho forte da primeira linha",
+  "caption": "Texto completo da legenda incluindo o gancho e o CTA...",
+  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5"]
+}`;
+
+    let resultJson: any = null;
+
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.7-flash',
+          contents: systemPrompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.7,
+          }
+        });
+
+        const text = response.text || '';
+        const cleanedText = text.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+        resultJson = JSON.parse(cleanedText);
+      } catch (genErr: any) {
+        console.warn('[Gemini AI] Aviso ao gerar legenda com Gemini:', genErr?.message || genErr);
+      }
+    }
+
+    if (!resultJson || !resultJson.caption) {
+      resultJson = {
+        hook: `🔥 ${title.trim()}: O que ninguém te conta sobre isso!`,
+        caption: `🔥 ${title.trim()}: O que ninguém te conta sobre isso!\n\nSe você quer levar seus resultados para o próximo nível, preste atenção nesta estratégia prática.\n\n👇 Deslize para o lado para ver todos os detalhes visuais.\n\n💬 Já aplicava isso na sua rotina? Me conta nos comentários!\n\n💾 Salve este post para consultar depois!`,
+        hashtags: ['#socialmedia', '#marketingdigital', '#estrategia', '#criadores', '#conteudo']
+      };
+    }
+
+    res.json({ success: true, data: resultJson });
+  } catch (err: any) {
+    console.error('Error in /api/ai/caption-generator:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao gerar legenda.' });
   }
 });
 

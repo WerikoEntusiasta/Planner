@@ -244,6 +244,9 @@ export interface Creative {
   format: CreativeFormat;
   platform: Platform | 'all' | 'facebook' | 'linkedin' | 'pinterest';
   status: CreativeStatus;
+  captionStatus?: CreativeStatus;
+  captionFeedback?: string;
+  captionApprovalDate?: string;
   assets: CreativeAsset[];
   aspectRatio?: '1:1' | '4:5' | '9:16' | '16:9';
   shareToken: string;
