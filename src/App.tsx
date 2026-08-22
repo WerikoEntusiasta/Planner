@@ -32,6 +32,7 @@ import HashtagLibraryModal from './components/HashtagLibraryModal';
 import ProductionPipelineView from './components/ProductionPipelineView';
 import CampaignsModal from './components/CampaignsModal';
 import ReferenceHubModal from './components/ReferenceHubModal';
+import AndroidAppModal from './components/AndroidAppModal';
 import CarouselAICreatorModal from './components/CarouselAICreatorModal';
 import ComingSoonModal, { ComingSoonFeatureType } from './components/ComingSoonModal';
 import QuickOnboardingGuide from './components/QuickOnboardingGuide';
@@ -58,6 +59,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'editor' | 'carousel-ai' | 'creatives' | 'scheduling'>('grid');
   const [isCampaignsModalOpen, setIsCampaignsModalOpen] = useState(false);
   const [isReferenceHubModalOpen, setIsReferenceHubModalOpen] = useState(false);
+  const [isAndroidAppModalOpen, setIsAndroidAppModalOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const { socket, isConnected } = useSocket();
   const [activeWorkspaceMembers, setActiveWorkspaceMembers] = useState<{ userId: string; userName: string }[]>([]);

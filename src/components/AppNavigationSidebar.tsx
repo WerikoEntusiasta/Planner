@@ -11,7 +11,7 @@ import {
   Calendar, Grid, Layers, Plus, Sparkles, ChevronDown, ChevronRight, UserPlus, LogOut, 
   Users, Edit3, LifeBuoy, Shield, BarChart2, Palette, Hash, Rocket, 
   Bookmark, Workflow, Menu, X, CheckCircle2, Target, TrendingUp,
-  Image as ImageIcon, Wrench, Lock, Clock
+  Image as ImageIcon, Wrench, Lock, Clock, Smartphone
 } from 'lucide-react';
 
 interface AppNavigationSidebarProps {
@@ -38,6 +38,7 @@ interface AppNavigationSidebarProps {
   onOpenCampaignsModal?: () => void;
   onOpenReferenceHubModal?: () => void;
   onOpenCarouselAIModal?: () => void;
+  onOpenAndroidAppModal?: () => void;
   isSimulatedSession?: boolean;
   onExitSimulation?: () => void;
   
@@ -72,6 +73,7 @@ export default function AppNavigationSidebar({
   onOpenCampaignsModal,
   onOpenReferenceHubModal,
   onOpenCarouselAIModal,
+  onOpenAndroidAppModal,
   isSimulatedSession,
   onExitSimulation,
   totalPostsCount,
@@ -131,6 +133,14 @@ export default function AppNavigationSidebar({
   ];
 
   const toolItems = [
+    { 
+      id: 'android_app', 
+      label: 'App Android (Sincronizado)', 
+      icon: Smartphone, 
+      color: 'text-emerald-400', 
+      action: onOpenAndroidAppModal, 
+      allowed: true 
+    },
     { 
       id: 'carousel_ai', 
       label: 'Criador de Carrossel IA', 
@@ -438,6 +448,34 @@ export default function AppNavigationSidebar({
             </div>
           )}
         </div>
+
+        {/* ANDROID APP SYNC BUTTON */}
+        <button
+          type="button"
+          onClick={() => {
+            onOpenAndroidAppModal?.();
+            setMobileOpen(false);
+          }}
+          className="w-full p-2.5 rounded-xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent border border-emerald-500/30 hover:border-emerald-500/50 hover:bg-emerald-500/20 transition-all flex items-center justify-between text-left cursor-pointer group shadow-sm"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 shrink-0">
+              <Smartphone size={15} />
+            </div>
+            <div className="truncate">
+              <div className="text-[11px] font-bold text-emerald-300 font-display truncate flex items-center gap-1.5">
+                <span>App Android</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[8px] font-mono font-bold bg-emerald-500/20 text-emerald-400">
+                  Sync
+                </span>
+              </div>
+              <div className="text-[9px] text-zinc-400 font-mono">
+                Instalar no Celular
+              </div>
+            </div>
+          </div>
+          <ChevronRight size={13} className="text-emerald-400/60 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition-all shrink-0" />
+        </button>
 
         {/* STATS MINI CARD */}
         <div className="bg-[#121218] border border-[#24242D] p-3 rounded-xl space-y-2">
