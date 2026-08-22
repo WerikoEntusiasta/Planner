@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Creative, CreativeAsset, CreativeStatus } from '../types';
+import ProfessionalVideoPlayer from './ProfessionalVideoPlayer';
 import { 
   Check, X, MessageSquare, Send, Sparkles, AlertCircle, 
   ChevronLeft, ChevronRight, Eye, Smartphone, Instagram, 
@@ -1792,113 +1793,18 @@ export default function ClientCreativeApprovalPage({
               >
                 {activeSlide ? (
                   isVideo ? (
-                    <div className="relative w-full h-full flex items-center justify-center bg-black">
-                      <video
-                        ref={videoRef}
-                        src={activeSlide.url}
-                        playsInline
-                        preload="auto"
-                        autoPlay
-                        loop
-                        muted={isVideoMuted}
-                        onLoadedMetadata={(e) => {
-                          const v = e.currentTarget;
-                          if (v.videoWidth && v.videoHeight) {
-                            setNaturalMediaSize({
-                              width: v.videoWidth,
-                              height: v.videoHeight,
-                              ratio: v.videoWidth / v.videoHeight
-                            });
-                          }
-                          setVideoDuration(v.duration || 0);
-                          // Auto-play safely
-                          v.play().then(() => setIsVideoPlaying(true)).catch(() => setIsVideoPlaying(false));
-                        }}
-                        onTimeUpdate={(e) => {
-                          setVideoCurrentTime(e.currentTarget.currentTime || 0);
-                        }}
-                        onPlay={() => setIsVideoPlaying(true)}
-                        onPause={() => setIsVideoPlaying(false)}
-                        onClick={handleTogglePlay}
-                        className={`w-full h-full ${objectFitMode === 'cover' ? 'object-cover' : 'object-contain'} cursor-pointer`}
-                      />
-
-                      {/* PLAY / PAUSE OVERLAY BUTTON */}
-                      {!isVideoPlaying && (
-                        <div 
-                          onClick={handleTogglePlay}
-                          className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer transition-all z-20"
-                        >
-                          <div className="w-16 h-16 rounded-full bg-purple-600/90 text-white flex items-center justify-center shadow-2xl hover:scale-110 transition-transform">
-                            <Play size={30} className="ml-1 fill-white" />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* UNMUTE CALL-TO-ACTION PILL */}
-                      {isVideoMuted && isVideoPlaying && showUnmuteHint && (
-                        <button
-                          type="button"
-                          onClick={handleToggleMute}
-                          className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-full bg-black/85 backdrop-blur-md border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 hover:bg-black transition-all shadow-lg cursor-pointer animate-bounce"
-                        >
-                          <VolumeX size={14} className="text-amber-400" />
-                          <span>🔊 Toque para ativar o som</span>
-                        </button>
-                      )}
-
-                      {/* FLOATING VIDEO CONTROLS BAR */}
-                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/70 to-transparent p-3 pt-6 flex flex-col gap-2 z-20 opacity-90 group-hover:opacity-100 transition-opacity">
-                        {/* Progress Scrubber Bar */}
-                        <div 
-                          className="w-full h-1.5 hover:h-2.5 bg-white/25 rounded-full cursor-pointer transition-all relative overflow-hidden"
-                          onClick={handleVideoSeek}
-                        >
-                          <div 
-                            className="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full pointer-events-none"
-                            style={{ width: `${(videoCurrentTime / (videoDuration || 1)) * 100}%` }}
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between text-white text-xs">
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handleTogglePlay}
-                              className="p-1 hover:text-purple-400 transition-colors cursor-pointer"
-                              title={isVideoPlaying ? 'Pausar' : 'Reproduzir'}
-                            >
-                              {isVideoPlaying ? <Pause size={17} /> : <Play size={17} className="fill-white" />}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={handleToggleMute}
-                              className="p-1 hover:text-purple-400 transition-colors cursor-pointer flex items-center gap-1 text-[11px]"
-                              title={isVideoMuted ? 'Ativar som' : 'Silenciar áudio'}
-                            >
-                              {isVideoMuted ? <VolumeX size={17} className="text-amber-400" /> : <Volume2 size={17} className="text-emerald-400" />}
-                              <span className="hidden sm:inline font-mono">{isVideoMuted ? 'Mudo' : 'Com Som'}</span>
-                            </button>
-
-                            <span className="font-mono text-[10px] text-zinc-300 ml-1">
-                              {formatVideoTime(videoCurrentTime)} / {formatVideoTime(videoDuration)}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={handleToggleFullscreen}
-                              className="p-1 hover:text-purple-400 transition-colors cursor-pointer"
-                              title="Tela Cheia"
-                            >
-                              <Maximize2 size={15} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <ProfessionalVideoPlayer
+                      url={activeSlide.url}
+                      aspectRatio={selectedAspectRatio === 'auto' ? 'auto' : selectedAspectRatio}
+                      objectFit={objectFitMode}
+                      autoPlay={true}
+                      loop={true}
+                      mutedDefault={true}
+                      onDimensionDetected={(dims) => {
+                        setNaturalMediaSize(dims);
+                      }}
+                      className="w-full h-full"
+                    />
                   ) : (
                     <img
                       src={activeSlide.url}
