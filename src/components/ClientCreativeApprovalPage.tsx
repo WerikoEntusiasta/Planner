@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Creative, CreativeAsset, CreativeStatus } from '../types';
 import { 
   Check, X, MessageSquare, Send, Sparkles, AlertCircle, 
@@ -7,7 +7,8 @@ import {
   Share2, Maximize2, Shield, RefreshCw, Layers, ArrowLeft,
   CheckCheck, Filter, ThumbsDown, HelpCircle, ExternalLink,
   FileText, Copy, AlignLeft, Hash, Edit3, MessageCircle,
-  Download, Lock
+  Download, Lock, Play, Pause, Volume2, VolumeX, RotateCcw,
+  Sliders, Ratio
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { copyToClipboard } from '../utils/clipboard';
@@ -19,6 +20,24 @@ interface ClientCreativeApprovalPageProps {
   initialFocus?: 'all' | 'visual' | 'caption';
   onBackToApp?: () => void;
 }
+
+// Robust helper to detect if asset is a video
+const isMediaVideo = (url?: string, type?: string, format?: string) => {
+  if (type === 'video' || format === 'video' || format === 'reels_story') return true;
+  if (!url) return false;
+  if (url.match(/\.(mp4|webm|ogg|mov|m4v|mkv)(\?.*)?$/i)) return true;
+  if (url.startsWith('data:video/')) return true;
+  if (url.includes('blob:video') || url.includes('/uploads/video_') || url.includes('/uploads/media_')) return true;
+  return false;
+};
+
+// Format video seconds into MM:SS
+const formatVideoTime = (seconds: number) => {
+  if (isNaN(seconds) || seconds < 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+};
 
 export default function ClientCreativeApprovalPage({ 
   shareToken, 
@@ -65,6 +84,87 @@ export default function ClientCreativeApprovalPage({
   // Carousel & media viewer state for inspector
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
   const [mockupMode, setMockupMode] = useState<'feed' | 'clean'>('feed');
+  const [selectedAspectRatio, setSelectedAspectRatio] = useState<'auto' | '9:16' | '4:5' | '1:1' | '16:9'>('auto');
+  const [objectFitMode, setObjectFitMode] = useState<'contain' | 'cover'>('contain');
+  const [naturalMediaSize, setNaturalMediaSize] = useState<{ width: number; height: number; ratio: number } | null>(null);
+
+  // Video player controls state
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaContainerRef = useRef<HTMLDivElement>(null);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(true);
+  const [isVideoMuted, setIsVideoMuted] = useState(true);
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [showUnmuteHint, setShowUnmuteHint] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Toggle Video Play / Pause
+  const handleTogglePlay = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play().catch(err => console.warn('Play interrupted:', err));
+      setIsVideoPlaying(true);
+    } else {
+      videoRef.current.pause();
+      setIsVideoPlaying(false);
+    }
+  };
+
+  // Toggle Mute / Sound
+  const handleToggleMute = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!videoRef.current) return;
+    const nextMuted = !videoRef.current.muted;
+    videoRef.current.muted = nextMuted;
+    setIsVideoMuted(nextMuted);
+    setShowUnmuteHint(false);
+    if (!nextMuted) {
+      showToast('Áudio do vídeo ativado 🔊', 'info');
+    } else {
+      showToast('Áudio silenciado 🔇', 'info');
+    }
+  };
+
+  // Seek video track
+  const handleVideoSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (!videoRef.current || !videoDuration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percentage = Math.max(0, Math.min(1, clickX / rect.width));
+    const newTime = percentage * videoDuration;
+    videoRef.current.currentTime = newTime;
+    setVideoCurrentTime(newTime);
+  };
+
+  // Toggle Fullscreen on media container
+  const handleToggleFullscreen = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!mediaContainerRef.current) return;
+
+    if (!document.fullscreenElement) {
+      if (mediaContainerRef.current.requestFullscreen) {
+        mediaContainerRef.current.requestFullscreen().catch(() => {});
+        setIsFullscreen(true);
+      } else if ((videoRef.current as any)?.webkitEnterFullscreen) {
+        (videoRef.current as any).webkitEnterFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  // Reset media natural size on slide or creative switch
+  useEffect(() => {
+    setNaturalMediaSize(null);
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
+    setIsVideoPlaying(true);
+  }, [currentSlideIndex, activeCreative?.id]);
   
   // Feedback modal states
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -657,7 +757,60 @@ export default function ClientCreativeApprovalPage({
   const activeAssets = activeCreative.assets || [];
   const activeSlide = activeAssets[currentSlideIndex] || activeAssets[0];
   const isCarousel = activeCreative.format === 'carousel' || activeAssets.length > 1;
-  const isVideo = activeCreative.format === 'video' || activeSlide?.type === 'video';
+  const isVideo = isMediaVideo(activeSlide?.url, activeSlide?.type, activeCreative.format);
+
+  // Dynamic aspect ratio calculation based on natural size or chosen preference
+  const effectiveAspect = (() => {
+    if (selectedAspectRatio === '9:16') {
+      return { ratioClass: 'aspect-[9/16]', maxWClass: 'max-w-[360px] sm:max-w-[390px]', label: '9:16 (Reels/Story)', customStyle: { aspectRatio: '9/16' } };
+    }
+    if (selectedAspectRatio === '4:5') {
+      return { ratioClass: 'aspect-[4/5]', maxWClass: 'max-w-[420px] sm:max-w-[460px]', label: '4:5 (Feed Retrato)', customStyle: { aspectRatio: '4/5' } };
+    }
+    if (selectedAspectRatio === '1:1') {
+      return { ratioClass: 'aspect-square', maxWClass: 'max-w-[500px]', label: '1:1 (Quadrado)', customStyle: { aspectRatio: '1/1' } };
+    }
+    if (selectedAspectRatio === '16:9') {
+      return { ratioClass: 'aspect-[16/9]', maxWClass: 'max-w-2xl', label: '16:9 (Horizontal)', customStyle: { aspectRatio: '16/9' } };
+    }
+
+    // Auto / Original mode: Calculate from natural width/height if available
+    if (naturalMediaSize && naturalMediaSize.width > 0 && naturalMediaSize.height > 0) {
+      const r = naturalMediaSize.ratio;
+      const customStyle = { aspectRatio: `${naturalMediaSize.width} / ${naturalMediaSize.height}` };
+      if (r < 0.65) {
+        return { ratioClass: 'aspect-[9/16]', maxWClass: 'max-w-[360px] sm:max-w-[390px]', label: `Original 9:16 (${naturalMediaSize.width}x${naturalMediaSize.height})`, customStyle };
+      }
+      if (r < 0.9) {
+        return { ratioClass: 'aspect-[4/5]', maxWClass: 'max-w-[420px] sm:max-w-[460px]', label: `Original 4:5 (${naturalMediaSize.width}x${naturalMediaSize.height})`, customStyle };
+      }
+      if (r > 1.4) {
+        return { ratioClass: 'aspect-[16/9]', maxWClass: 'max-w-2xl', label: `Original 16:9 (${naturalMediaSize.width}x${naturalMediaSize.height})`, customStyle };
+      }
+      if (r >= 0.95 && r <= 1.05) {
+        return { ratioClass: 'aspect-square', maxWClass: 'max-w-[500px]', label: `Original 1:1 (${naturalMediaSize.width}x${naturalMediaSize.height})`, customStyle };
+      }
+      return {
+        ratioClass: '',
+        customStyle,
+        maxWClass: r > 1 ? 'max-w-2xl' : 'max-w-[440px]',
+        label: `Original (${naturalMediaSize.width}x${naturalMediaSize.height})`
+      };
+    }
+
+    // Creative format or aspectRatio fallback
+    if (activeCreative.aspectRatio === '9:16' || activeCreative.format === 'reels_story' || (isVideo && !activeCreative.aspectRatio)) {
+      return { ratioClass: 'aspect-[9/16]', maxWClass: 'max-w-[360px] sm:max-w-[390px]', label: '9:16 (Reels/Story)', customStyle: { aspectRatio: '9/16' } };
+    }
+    if (activeCreative.aspectRatio === '4:5') {
+      return { ratioClass: 'aspect-[4/5]', maxWClass: 'max-w-[420px] sm:max-w-[460px]', label: '4:5 (Feed Retrato)', customStyle: { aspectRatio: '4/5' } };
+    }
+    if (activeCreative.aspectRatio === '16:9') {
+      return { ratioClass: 'aspect-[16/9]', maxWClass: 'max-w-2xl', label: '16:9 (Horizontal)', customStyle: { aspectRatio: '16/9' } };
+    }
+
+    return { ratioClass: 'aspect-square', maxWClass: 'max-w-[500px]', label: '1:1 (Padrão)', customStyle: { aspectRatio: '1/1' } };
+  })();
 
   // Stats for hub
   const totalCount = creatives.length;
@@ -1147,7 +1300,7 @@ export default function ClientCreativeApprovalPage({
                 const assets = creative.assets || [];
                 const firstAsset = assets[0];
                 const isCar = creative.format === 'carousel' || assets.length > 1;
-                const isVid = creative.format === 'video' || firstAsset?.type === 'video';
+                const isVid = isMediaVideo(firstAsset?.url, firstAsset?.type, creative.format);
                 
                 const isPending = creative.status === 'pending_approval' || creative.status === 'draft';
                 const isApproved = creative.status === 'approved';
@@ -1186,7 +1339,20 @@ export default function ClientCreativeApprovalPage({
                     >
                       {firstAsset ? (
                         isVid ? (
-                          <video src={firstAsset.url} className="w-full h-full object-cover opacity-85 group-hover:scale-105 transition-transform duration-500" />
+                          <div className="relative w-full h-full flex items-center justify-center">
+                            <video 
+                              src={firstAsset.url} 
+                              muted 
+                              playsInline 
+                              preload="metadata"
+                              className="w-full h-full object-cover opacity-85 group-hover:scale-105 transition-transform duration-500" 
+                            />
+                            <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                              <div className="w-10 h-10 rounded-full bg-black/70 backdrop-blur-sm border border-white/20 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                                <Play size={18} className="ml-0.5 fill-white" />
+                              </div>
+                            </div>
+                          </div>
                         ) : (
                           <img
                             src={firstAsset.url}
@@ -1462,62 +1628,145 @@ export default function ClientCreativeApprovalPage({
           <section className="lg:col-span-7 flex flex-col items-center">
             
             {/* TOP CONTROLS FOR VISUAL INSPECTION */}
-            <div className="w-full max-w-lg mb-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-              <button
-                onClick={() => setViewMode('hub')}
-                className="text-xs font-bold text-zinc-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer transition-colors bg-zinc-900/80 px-3 py-2 rounded-xl border border-zinc-800"
-              >
-                <ArrowLeft size={14} />
-                <span>Voltar à Central ({creatives.length} posts)</span>
-              </button>
+            <div className="w-full mb-4 flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                <button
+                  onClick={() => setViewMode('hub')}
+                  className="text-xs font-bold text-zinc-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer transition-colors bg-zinc-900/80 px-3 py-2 rounded-xl border border-zinc-800"
+                >
+                  <ArrowLeft size={14} />
+                  <span>Voltar à Central ({creatives.length} posts)</span>
+                </button>
 
-              <div className="flex items-center justify-end gap-2">
-                {isDownloadAllowed && activeSlide && (
-                  <button
-                    onClick={() => {
-                      const ext = isVideo ? 'mp4' : 'png';
-                      const cleanTitle = (activeCreative.title || 'criativo').replace(/[^a-z0-9]/gi, '_').toLowerCase();
-                      handleDownloadAsset(activeSlide.url, `${cleanTitle}_slide_${currentSlideIndex + 1}.${ext}`);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
-                    title="Baixar esta imagem/vídeo em alta resolução"
-                  >
-                    <Download size={13} />
-                    <span>{isCarousel ? `Baixar Slide ${currentSlideIndex + 1}` : 'Baixar Mídia'}</span>
-                  </button>
-                )}
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {isDownloadAllowed && activeSlide && (
+                    <button
+                      onClick={() => {
+                        const ext = isVideo ? 'mp4' : 'png';
+                        const cleanTitle = (activeCreative.title || 'criativo').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                        handleDownloadAsset(activeSlide.url, `${cleanTitle}_slide_${currentSlideIndex + 1}.${ext}`);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                      title="Baixar este arquivo em alta resolução"
+                    >
+                      <Download size={13} />
+                      <span>{isCarousel ? `Baixar Slide ${currentSlideIndex + 1}` : 'Baixar Mídia'}</span>
+                    </button>
+                  )}
 
-                <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+                  <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+                    <button
+                      onClick={() => setMockupMode('feed')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                        mockupMode === 'feed' ? 'bg-zinc-800 text-white font-bold shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                      title="Simular visualização no feed do Instagram"
+                    >
+                      <Smartphone size={12} />
+                      <span>Feed</span>
+                    </button>
+                    <button
+                      onClick={() => setMockupMode('clean')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                        mockupMode === 'clean' ? 'bg-zinc-800 text-white font-bold shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                      title="Visualização limpa da arte no tamanho original"
+                    >
+                      <Maximize2 size={12} />
+                      <span>Arte Pura</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* PROPORTIONS & RATIO SWITCHER BAR */}
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-zinc-900/60 border border-zinc-800/80 rounded-2xl">
+                <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+                  <span className="text-[11px] font-mono text-zinc-500 flex items-center gap-1 mr-1">
+                    <Ratio size={12} /> Proporção:
+                  </span>
                   <button
-                    onClick={() => setMockupMode('feed')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
-                      mockupMode === 'feed' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
+                    onClick={() => setSelectedAspectRatio('auto')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                      selectedAspectRatio === 'auto'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-zinc-950 text-zinc-400 hover:text-white border border-zinc-800'
                     }`}
-                    title="Simular visualização no feed do Instagram"
+                    title="Tamanho e proporção natural do arquivo enviado"
                   >
-                    <Smartphone size={12} />
-                    <span>Feed</span>
+                    Original (Auto)
                   </button>
                   <button
-                    onClick={() => setMockupMode('clean')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
-                      mockupMode === 'clean' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
+                    onClick={() => setSelectedAspectRatio('9:16')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                      selectedAspectRatio === '9:16'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-zinc-950 text-zinc-400 hover:text-white border border-zinc-800'
                     }`}
-                    title="Visualização limpa da arte"
+                    title="Formato vertical 9:16 para Reels e Stories"
                   >
-                    <Maximize2 size={12} />
-                    <span>Arte Pura</span>
+                    9:16 (Reels)
+                  </button>
+                  <button
+                    onClick={() => setSelectedAspectRatio('4:5')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                      selectedAspectRatio === '4:5'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-zinc-950 text-zinc-400 hover:text-white border border-zinc-800'
+                    }`}
+                    title="Formato retrato 4:5 do Feed do Instagram"
+                  >
+                    4:5 (Retrato)
+                  </button>
+                  <button
+                    onClick={() => setSelectedAspectRatio('1:1')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                      selectedAspectRatio === '1:1'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-zinc-950 text-zinc-400 hover:text-white border border-zinc-800'
+                    }`}
+                    title="Formato quadrado 1:1 clássico"
+                  >
+                    1:1 (Quadrado)
+                  </button>
+                  <button
+                    onClick={() => setSelectedAspectRatio('16:9')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                      selectedAspectRatio === '16:9'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'bg-zinc-950 text-zinc-400 hover:text-white border border-zinc-800'
+                    }`}
+                    title="Formato horizontal 16:9 widescreen"
+                  >
+                    16:9 (Horizontal)
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {naturalMediaSize && (
+                    <span className="text-[10px] font-mono bg-zinc-950 text-zinc-400 px-2 py-1 rounded-md border border-zinc-800">
+                      Resolução: {naturalMediaSize.width}x{naturalMediaSize.height}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => setObjectFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
+                    className="text-[11px] font-mono text-zinc-400 hover:text-white px-2 py-1 rounded-lg bg-zinc-950 border border-zinc-800 transition-colors cursor-pointer"
+                    title={objectFitMode === 'contain' ? 'Modo atual: Ajustar inteiro (sem cortes)' : 'Modo atual: Preencher espaço'}
+                  >
+                    {objectFitMode === 'contain' ? '↔️ Ajustar' : '↕️ Preencher'}
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* INSTAGRAM MOCKUP CONTAINER */}
-            <div className="w-full max-w-lg bg-black border border-zinc-800 rounded-3xl overflow-hidden shadow-2xl relative">
+            {/* INSTAGRAM MOCKUP CONTAINER WITH DYNAMIC ASPECT RATIO */}
+            <div 
+              className={`w-full ${effectiveAspect.maxWClass} transition-all duration-300 bg-black border border-zinc-800 rounded-3xl overflow-hidden shadow-2xl relative flex flex-col`}
+            >
               
               {/* FEED HEADER SIMULATION */}
               {mockupMode === 'feed' && (
-                <div className="p-3.5 bg-zinc-950 border-b border-zinc-800/80 flex items-center justify-between">
+                <div className="p-3.5 bg-zinc-950 border-b border-zinc-800/80 flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-yellow-500 via-pink-500 to-purple-600 p-0.5">
                       <div className="w-full h-full rounded-full bg-black flex items-center justify-center font-bold text-xs text-white">
@@ -1535,23 +1784,136 @@ export default function ClientCreativeApprovalPage({
                 </div>
               )}
 
-              {/* MEDIA DISPLAY AREA */}
-              <div className="relative aspect-square sm:aspect-square bg-zinc-950 flex items-center justify-center overflow-hidden">
+              {/* MEDIA DISPLAY AREA (RESPONSIVE TO ORIGINAL VIDEO & IMAGE PROPORTIONS) */}
+              <div 
+                ref={mediaContainerRef}
+                style={effectiveAspect.customStyle}
+                className={`relative w-full ${effectiveAspect.ratioClass} bg-zinc-950 flex items-center justify-center overflow-hidden group select-none`}
+              >
                 {activeSlide ? (
                   isVideo ? (
-                    <video
-                      src={activeSlide.url}
-                      controls
-                      autoPlay
-                      muted
-                      loop
-                      className="w-full h-full object-contain"
-                    />
+                    <div className="relative w-full h-full flex items-center justify-center bg-black">
+                      <video
+                        ref={videoRef}
+                        src={activeSlide.url}
+                        playsInline
+                        preload="auto"
+                        autoPlay
+                        loop
+                        muted={isVideoMuted}
+                        onLoadedMetadata={(e) => {
+                          const v = e.currentTarget;
+                          if (v.videoWidth && v.videoHeight) {
+                            setNaturalMediaSize({
+                              width: v.videoWidth,
+                              height: v.videoHeight,
+                              ratio: v.videoWidth / v.videoHeight
+                            });
+                          }
+                          setVideoDuration(v.duration || 0);
+                          // Auto-play safely
+                          v.play().then(() => setIsVideoPlaying(true)).catch(() => setIsVideoPlaying(false));
+                        }}
+                        onTimeUpdate={(e) => {
+                          setVideoCurrentTime(e.currentTarget.currentTime || 0);
+                        }}
+                        onPlay={() => setIsVideoPlaying(true)}
+                        onPause={() => setIsVideoPlaying(false)}
+                        onClick={handleTogglePlay}
+                        className={`w-full h-full ${objectFitMode === 'cover' ? 'object-cover' : 'object-contain'} cursor-pointer`}
+                      />
+
+                      {/* PLAY / PAUSE OVERLAY BUTTON */}
+                      {!isVideoPlaying && (
+                        <div 
+                          onClick={handleTogglePlay}
+                          className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer transition-all z-20"
+                        >
+                          <div className="w-16 h-16 rounded-full bg-purple-600/90 text-white flex items-center justify-center shadow-2xl hover:scale-110 transition-transform">
+                            <Play size={30} className="ml-1 fill-white" />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* UNMUTE CALL-TO-ACTION PILL */}
+                      {isVideoMuted && isVideoPlaying && showUnmuteHint && (
+                        <button
+                          type="button"
+                          onClick={handleToggleMute}
+                          className="absolute top-3 left-3 z-20 px-3 py-1.5 rounded-full bg-black/85 backdrop-blur-md border border-white/20 text-white text-xs font-bold flex items-center gap-1.5 hover:bg-black transition-all shadow-lg cursor-pointer animate-bounce"
+                        >
+                          <VolumeX size={14} className="text-amber-400" />
+                          <span>🔊 Toque para ativar o som</span>
+                        </button>
+                      )}
+
+                      {/* FLOATING VIDEO CONTROLS BAR */}
+                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 via-black/70 to-transparent p-3 pt-6 flex flex-col gap-2 z-20 opacity-90 group-hover:opacity-100 transition-opacity">
+                        {/* Progress Scrubber Bar */}
+                        <div 
+                          className="w-full h-1.5 hover:h-2.5 bg-white/25 rounded-full cursor-pointer transition-all relative overflow-hidden"
+                          onClick={handleVideoSeek}
+                        >
+                          <div 
+                            className="h-full bg-gradient-to-r from-purple-500 to-blue-500 rounded-full pointer-events-none"
+                            style={{ width: `${(videoCurrentTime / (videoDuration || 1)) * 100}%` }}
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between text-white text-xs">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleTogglePlay}
+                              className="p-1 hover:text-purple-400 transition-colors cursor-pointer"
+                              title={isVideoPlaying ? 'Pausar' : 'Reproduzir'}
+                            >
+                              {isVideoPlaying ? <Pause size={17} /> : <Play size={17} className="fill-white" />}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleToggleMute}
+                              className="p-1 hover:text-purple-400 transition-colors cursor-pointer flex items-center gap-1 text-[11px]"
+                              title={isVideoMuted ? 'Ativar som' : 'Silenciar áudio'}
+                            >
+                              {isVideoMuted ? <VolumeX size={17} className="text-amber-400" /> : <Volume2 size={17} className="text-emerald-400" />}
+                              <span className="hidden sm:inline font-mono">{isVideoMuted ? 'Mudo' : 'Com Som'}</span>
+                            </button>
+
+                            <span className="font-mono text-[10px] text-zinc-300 ml-1">
+                              {formatVideoTime(videoCurrentTime)} / {formatVideoTime(videoDuration)}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleToggleFullscreen}
+                              className="p-1 hover:text-purple-400 transition-colors cursor-pointer"
+                              title="Tela Cheia"
+                            >
+                              <Maximize2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     <img
                       src={activeSlide.url}
                       alt={activeSlide.title || `Slide ${currentSlideIndex + 1}`}
-                      className="w-full h-full object-contain select-none"
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        if (img.naturalWidth && img.naturalHeight) {
+                          setNaturalMediaSize({
+                            width: img.naturalWidth,
+                            height: img.naturalHeight,
+                            ratio: img.naturalWidth / img.naturalHeight
+                          });
+                        }
+                      }}
+                      className={`w-full h-full ${objectFitMode === 'cover' ? 'object-cover' : 'object-contain'} select-none transition-all`}
                     />
                   )
                 ) : (
@@ -1563,7 +1925,7 @@ export default function ClientCreativeApprovalPage({
 
                 {/* CAROUSEL SLIDE NUMBER BADGE */}
                 {isCarousel && (
-                  <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur-md border border-white/10 text-white font-mono text-xs font-bold flex items-center gap-1 shadow-lg">
+                  <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur-md border border-white/10 text-white font-mono text-xs font-bold flex items-center gap-1 shadow-lg z-20">
                     <span>{currentSlideIndex + 1}</span>
                     <span className="text-zinc-400">/</span>
                     <span>{activeAssets.length}</span>
@@ -1575,14 +1937,14 @@ export default function ClientCreativeApprovalPage({
                   <>
                     <button
                       onClick={() => setCurrentSlideIndex((prev) => (prev - 1 + activeAssets.length) % activeAssets.length)}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/75 hover:bg-black text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer shadow-lg backdrop-blur-sm"
+                      className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/75 hover:bg-black text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer shadow-lg backdrop-blur-sm z-20"
                       title="Slide Anterior (Seta Esquerda)"
                     >
                       <ChevronLeft size={20} />
                     </button>
                     <button
                       onClick={() => setCurrentSlideIndex((prev) => (prev + 1) % activeAssets.length)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/75 hover:bg-black text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer shadow-lg backdrop-blur-sm"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/75 hover:bg-black text-white border border-white/10 flex items-center justify-center transition-all cursor-pointer shadow-lg backdrop-blur-sm z-20"
                       title="Próximo Slide (Seta Direita)"
                     >
                       <ChevronRight size={20} />
@@ -1593,7 +1955,7 @@ export default function ClientCreativeApprovalPage({
 
               {/* FEED FOOTER SIMULATION */}
               {mockupMode === 'feed' && (
-                <div className="p-3.5 bg-zinc-950 border-t border-zinc-800/80 space-y-2">
+                <div className="p-3.5 bg-zinc-950 border-t border-zinc-800/80 space-y-2 shrink-0">
                   <div className="flex items-center justify-between text-zinc-300">
                     <div className="flex items-center gap-3">
                       <ThumbsUp size={16} className="text-zinc-400" />

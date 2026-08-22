@@ -8,7 +8,7 @@ import {
   Search, Filter, Smartphone, RefreshCw, Upload, Eye, Layers, 
   CheckCheck, Share2, HelpCircle, Shield, AlignLeft, FileText, 
   Wand2, MessageCircle, MoreHorizontal, Bookmark, Lightbulb, AlertTriangle,
-  Calendar, Rocket, XCircle, RotateCcw, Download
+  Calendar, Rocket, XCircle, RotateCcw, Download, Play, Pause
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ClientCreativeApprovalPage from './ClientCreativeApprovalPage';
@@ -383,7 +383,7 @@ export default function CreativeHubView({
     if (!files || files.length === 0) return;
 
     if (formAssets.length + files.length > 20) {
-      setUploadError('Um carrossel permite no máximo 20 imagens.');
+      setUploadError('Um carrossel permite no máximo 20 imagens ou vídeos.');
       return;
     }
 
@@ -394,26 +394,106 @@ export default function CreativeHubView({
       const newAssets: CreativeAsset[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const isVideo = file.type.startsWith('video/');
+        const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm|ogg|m4v)$/i);
 
         if (isVideo) {
-          const videoUrl = URL.createObjectURL(file);
+          // Read video as DataURL
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = (err) => reject(err);
+            reader.readAsDataURL(file);
+          });
+
+          // Detect video dimensions for auto aspect-ratio
+          try {
+            const videoEl = document.createElement('video');
+            videoEl.preload = 'metadata';
+            videoEl.src = dataUrl;
+            await new Promise((res) => {
+              videoEl.onloadedmetadata = () => res(true);
+              videoEl.onerror = () => res(false);
+              setTimeout(() => res(false), 2000);
+            });
+
+            if (videoEl.videoWidth && videoEl.videoHeight) {
+              const ratio = videoEl.videoWidth / videoEl.videoHeight;
+              if (ratio < 0.65) {
+                setFormAspectRatio('9:16');
+              } else if (ratio < 0.9) {
+                setFormAspectRatio('4:5');
+              } else if (ratio > 1.4) {
+                setFormAspectRatio('16:9');
+              } else {
+                setFormAspectRatio('1:1');
+              }
+            }
+          } catch (dimErr) {
+            console.warn('Video dimension detection warning:', dimErr);
+          }
+
+          let finalUrl = dataUrl;
+
+          // Attempt uploading to permanent server storage
+          try {
+            const uploadRes = await fetch('/api/upload-media', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                data: dataUrl,
+                filename: file.name,
+                type: 'video'
+              })
+            });
+            const uploadData = await uploadRes.json();
+            if (uploadRes.ok && uploadData.url) {
+              finalUrl = uploadData.url;
+            }
+          } catch (uploadErr) {
+            console.warn('Fallback to embedded base64 video URL:', uploadErr);
+          }
+
           newAssets.push({
             id: `asset_${Date.now()}_${i}`,
             type: 'video',
-            url: videoUrl,
+            url: finalUrl,
             name: file.name,
             size: file.size,
             format: file.type.split('/')[1] || 'mp4',
             order: formAssets.length + i,
             title: `Vídeo: ${file.name.slice(0, 20)}`
           });
+
+          if (formFormat !== 'carousel' && files.length === 1) {
+            setFormFormat('video');
+          }
         } else {
           const compressedDataUrl = await compressImageFile(file);
+          let finalUrl = compressedDataUrl;
+
+          // Attempt uploading to permanent server storage
+          try {
+            const uploadRes = await fetch('/api/upload-media', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                data: compressedDataUrl,
+                filename: file.name,
+                type: 'image'
+              })
+            });
+            const uploadData = await uploadRes.json();
+            if (uploadRes.ok && uploadData.url) {
+              finalUrl = uploadData.url;
+            }
+          } catch (uploadErr) {
+            console.warn('Fallback to base64 image URL:', uploadErr);
+          }
+
           newAssets.push({
             id: `asset_${Date.now()}_${i}`,
             type: 'image',
-            url: compressedDataUrl,
+            url: finalUrl,
             name: file.name,
             size: file.size,
             format: file.type.split('/')[1] || 'jpg',
@@ -1226,7 +1306,7 @@ export default function CreativeHubView({
               {filteredCreatives.map((creative) => {
                 const firstAsset = creative.assets?.[0];
                 const isCarousel = creative.format === 'carousel' || (creative.assets || []).length > 1;
-                const isVideo = creative.format === 'video' || firstAsset?.type === 'video';
+                const isVideo = creative.format === 'video' || firstAsset?.type === 'video' || (firstAsset?.url && (firstAsset.url.match(/\.(mp4|webm|ogg|mov|m4v)/i) || firstAsset.url.startsWith('data:video/')));
                 const hasCaption = Boolean(creative.description?.trim());
 
                 return (
@@ -1248,7 +1328,20 @@ export default function CreativeHubView({
                     >
                       {firstAsset ? (
                         isVideo ? (
-                          <video src={firstAsset.url} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500" />
+                          <div className="relative w-full h-full flex items-center justify-center">
+                            <video 
+                              src={firstAsset.url} 
+                              muted 
+                              playsInline 
+                              preload="metadata"
+                              className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500" 
+                            />
+                            <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                              <div className="w-9 h-9 rounded-full bg-black/70 backdrop-blur-sm border border-white/20 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                                <Play size={16} className="ml-0.5 fill-white" />
+                              </div>
+                            </div>
+                          </div>
                         ) : (
                           <img
                             src={firstAsset.url}

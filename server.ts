@@ -5000,6 +5000,23 @@ app.get('/api/stripe/webhook-status', (req, res) => {
 
 // Serve public static assets (OG Images, Icons, Favicons, Manifest, Sitemaps)
 const publicStaticPath = path.join(process.cwd(), 'public');
+const uploadsDir = path.join(publicStaticPath, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  try {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  } catch (e) {}
+}
+
+app.use('/uploads', express.static(uploadsDir, {
+  maxAge: '7d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.mp4') || filePath.endsWith('.webm') || filePath.endsWith('.mov') || filePath.endsWith('.ogg')) {
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+    }
+  }
+}));
+
 app.use(express.static(publicStaticPath, {
   maxAge: '1d',
   setHeaders: (res, filePath) => {
@@ -5008,6 +5025,43 @@ app.use(express.static(publicStaticPath, {
     }
   }
 }));
+
+// Endpoint to upload and persist video & image assets permanently
+app.post('/api/upload-media', async (req, res) => {
+  try {
+    const { data, filename, type } = req.body;
+    if (!data) {
+      return res.status(400).json({ success: false, error: 'Dados da mídia não fornecidos' });
+    }
+
+    // Handle Base64 DataURL
+    const matches = typeof data === 'string' ? data.match(/^data:([A-Za-z0-9-+/]+);base64,(.+)$/) : null;
+    if (matches) {
+      const mimeType = matches[1];
+      const base64Data = matches[2];
+      const buffer = Buffer.from(base64Data, 'base64');
+      
+      const ext = filename?.split('.').pop() || (mimeType.includes('video') ? 'mp4' : mimeType.includes('png') ? 'png' : 'jpg');
+      const safeExt = ext.replace(/[^a-z0-9]/gi, '').toLowerCase();
+      const uniqueFileName = `media_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${safeExt || 'mp4'}`;
+      const filePath = path.join(uploadsDir, uniqueFileName);
+      
+      fs.writeFileSync(filePath, buffer);
+      return res.json({
+        success: true,
+        url: `/uploads/${uniqueFileName}`,
+        filename: uniqueFileName,
+        mimeType
+      });
+    }
+
+    // If already a persistent URL, return as is
+    res.json({ success: true, url: data });
+  } catch (err: any) {
+    console.error('Error in /api/upload-media:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // --- Vite integration or Static File serving ---
 async function setupFrontend() {

@@ -34,7 +34,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          npm install react-is --no-audit --no-fund
           npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Build Web Application
@@ -43,41 +42,45 @@ jobs:
         env:
           NODE_ENV: production
 
-      - name: Configure Capacitor Android
+      - name: Install & Configure Capacitor CLI & Android
         run: |
-          npm install --save @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+          npm install --save-dev @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest --legacy-peer-deps --no-audit --no-fund
           if [ ! -d "android" ]; then
             npx cap add android
           fi
           npx cap sync android
 
-      - name: Setup Gradle Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - name: Setup Android Permissions & Cleartext Traffic
+        run: |
+          # Ensure AndroidManifest has internet permission
+          MANIFEST_FILE="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST_FILE" ]; then
+            if ! grep -q "android.permission.INTERNET" "$MANIFEST_FILE"; then
+              sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' "$MANIFEST_FILE"
+            fi
+          fi
 
-      - name: Build Android APK
+      - name: Build Android APK with Gradle
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Locate APK File
+      - name: Locate & Copy APK File
+        id: find_apk
         run: |
-          APK_FILE=$(find android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          echo "Procurando arquivos APK gerados pelo Gradle..."
+          find android -name "*.apk"
+          APK_FILE=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_FILE" ]; then
-            echo "Erro: APK nao encontrado apos o build do gradle"
+            echo "::error::Nenhum arquivo APK foi encontrado após a compilação do Gradle."
             exit 1
           fi
-          echo "APK gerado com sucesso: $APK_FILE"
+          echo "APK encontrado com sucesso em: $APK_FILE"
           cp "$APK_FILE" PlannerStudio-release.apk
+          echo "apk_path=PlannerStudio-release.apk" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK Artifact
+      - name: Upload APK as GitHub Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PlannerStudio-Android-APK
@@ -86,6 +89,7 @@ jobs:
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         continue-on-error: true
         with:
           tag_name: apk-v${{ github.run_number }}
@@ -93,14 +97,15 @@ jobs:
           body: |
             ## 📱 Planner Studio - App Android Oficial
 
-            APK compilado automaticamente com sucesso.
+            APK compilado automaticamente com sucesso pelo GitHub Actions.
 
             - **Build Number:** #${{ github.run_number }}
             - **Commit:** `${{ github.sha }}`
+            - **Branch:** `${{ github.ref_name }}`
 
-            ### Como instalar:
-            1. Baixe o arquivo **PlannerStudio-release.apk** abaixo no seu celular.
-            2. Toque no arquivo e confirme a instalação.
+            ### Como instalar no celular:
+            1. Baixe o arquivo **PlannerStudio-release.apk** abaixo no seu aparelho Android.
+            2. Toque no arquivo baixado e confirme a instalação (autorize a instalação de fontes desconhecidas se solicitado).
           files: |
             PlannerStudio-release.apk
         env:
