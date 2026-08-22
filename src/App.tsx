@@ -1193,16 +1193,20 @@ export default function App() {
 
   // View routing triggers
   const queryParams = new URLSearchParams(window.location.search);
+  const pathParts = window.location.pathname.split('/').filter(Boolean);
+  const lastPathPart = pathParts[pathParts.length - 1];
+  const isPathToken = lastPathPart && !['aprovar', 'aprovar-legenda', 'aprovar-legendas', 'aprovar-criativo', 'aprovar-criativos', 'central-aprovacao'].includes(lastPathPart);
+
   const approvePostId = queryParams.get('approvePostId');
-  const creativeToken = queryParams.get('creativeToken') || queryParams.get('shareToken') || queryParams.get('token');
-  const clientApprovalToken = queryParams.get('clientToken') || queryParams.get('client') || queryParams.get('clientId');
+  const creativeToken = queryParams.get('creativeToken') || queryParams.get('shareToken') || queryParams.get('token') || queryParams.get('id') || queryParams.get('creativeId') || (isPathToken ? lastPathPart : '');
+  const clientApprovalToken = queryParams.get('clientToken') || queryParams.get('client') || queryParams.get('clientId') || queryParams.get('clientName');
   const isCaptionFocus = queryParams.get('focus') === 'caption' || queryParams.get('type') === 'caption' || window.location.pathname.includes('/aprovar-legenda') || window.location.pathname.includes('/aprovar-legendas');
   const isGeneralHubMode = queryParams.get('mode') === 'hub' || window.location.pathname.includes('/aprovar-criativos') || window.location.pathname.includes('/central-aprovacao') || window.location.pathname.includes('/aprovar-legendas');
-  const isCreativeApprovalUrl = window.location.pathname.includes('/aprovar-criativo') || window.location.pathname.includes('/aprovar-legenda') ||
-    (window.location.pathname.includes('/aprovar') && (creativeToken || clientApprovalToken || isGeneralHubMode));
+  const isCreativeApprovalUrl = window.location.pathname.startsWith('/aprovar') || window.location.pathname.startsWith('/central-aprovacao') ||
+    Boolean(creativeToken || clientApprovalToken || isGeneralHubMode);
 
   // Creative Client Approval Portal (Supports Single Creative & General Hub for All Creatives + Caption Approval)
-  if (creativeToken || clientApprovalToken || isCreativeApprovalUrl || isGeneralHubMode) {
+  if (isCreativeApprovalUrl || creativeToken || clientApprovalToken || isGeneralHubMode) {
     return (
       <ClientCreativeApprovalPage 
         shareToken={creativeToken || ''} 
@@ -1673,6 +1677,13 @@ export default function App() {
               ) : (
                 <DashboardView
                   posts={filteredPosts}
+                  allPosts={posts.filter(p => p.userId === workspaceOwnerId || !p.userId || p.userId === currentUser?.id)}
+                  clients={userClients}
+                  activeClient={userClients.find(c => c.id === activeClientId)}
+                  activeClientId={activeClientId}
+                  onSelectClient={setActiveClientId}
+                  onNewPostClick={handleOpenCreateDialog}
+                  currentUser={currentUser}
                 />
               )
             )}

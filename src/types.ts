@@ -220,7 +220,7 @@ export interface AdminUserItem {
 }
 
 export type CreativeFormat = 'carousel' | 'single_image' | 'video' | 'reels_story';
-export type CreativeStatus = 'draft' | 'pending_approval' | 'approved' | 'changes_requested' | 'rejected';
+export type CreativeStatus = 'draft' | 'pending_approval' | 'approved' | 'changes_requested' | 'scheduled' | 'posted' | 'published' | 'rejected';
 
 export interface CreativeAsset {
   id: string;
@@ -247,6 +247,9 @@ export interface Creative {
   captionStatus?: CreativeStatus;
   captionFeedback?: string;
   captionApprovalDate?: string;
+  scheduledDate?: string;
+  scheduledTime?: string;
+  postedDate?: string;
   assets: CreativeAsset[];
   aspectRatio?: '1:1' | '4:5' | '9:16' | '16:9';
   shareToken: string;
@@ -254,6 +257,22 @@ export interface Creative {
   approvalDate?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type ClientObservationCategory = 'visual' | 'caption' | 'tone' | 'do_not' | 'general';
+
+export interface ClientObservation {
+  id: string;
+  userId: string;
+  clientId: string;
+  clientName?: string;
+  title: string;
+  content: string;
+  category: ClientObservationCategory;
+  creativeId?: string;
+  creativeTitle?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 

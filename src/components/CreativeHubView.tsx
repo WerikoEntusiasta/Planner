@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Creative, CreativeAsset, CreativeFormat, CreativeStatus, Client, User } from '../types';
+import { Creative, CreativeAsset, CreativeFormat, CreativeStatus, Client, User, ClientObservation } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
 import { 
   Sparkles, Plus, Image as ImageIcon, Film, LayoutGrid, Check, 
@@ -7,11 +7,16 @@ import {
   ArrowLeft, ArrowRight, Star, Clock, CheckCircle2, AlertCircle, 
   Search, Filter, Smartphone, RefreshCw, Upload, Eye, Layers, 
   CheckCheck, Share2, HelpCircle, Shield, AlignLeft, FileText, 
-  Wand2, MessageCircle, MoreHorizontal
+  Wand2, MessageCircle, MoreHorizontal, Bookmark, Lightbulb, AlertTriangle,
+  Calendar, Rocket, XCircle, RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ClientCreativeApprovalPage from './ClientCreativeApprovalPage';
 import DesignerCarouselAIModal, { GeneratedCarouselData } from './DesignerCarouselAIModal';
+import ClientObservationsModal from './ClientObservationsModal';
+import ClientObservationsSection from './ClientObservationsSection';
+import CreativeHubDashboard, { CreativeSubMenu } from './CreativeHubDashboard';
+import CreativeScheduleModal from './CreativeScheduleModal';
 
 interface CreativeHubViewProps {
   clients: Client[];
@@ -36,11 +41,25 @@ export default function CreativeHubView({
     }
   });
 
+  // Active SubMenu Tab: 'dashboard' | 'changes_requested' | 'approved' | 'scheduled' | 'posted' | 'rejected'
+  const [activeSubMenu, setActiveSubMenu] = useState<CreativeSubMenu>('dashboard');
+
+  // Client Observations & Feedback Rules
+  const [observations, setObservations] = useState<ClientObservation[]>(() => {
+    try {
+      const saved = localStorage.getItem('creator_planner_client_observations');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isObservationsModalOpen, setIsObservationsModalOpen] = useState(false);
+  const [savedFeedbackMap, setSavedFeedbackMap] = useState<Record<string, boolean>>({});
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterFormat, setFilterFormat] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [filterCaptionStatus, setFilterCaptionStatus] = useState<string>('all');
   const [selectedClientId, setSelectedClientId] = useState<string>(activeClientId || 'all');
   
   // Link copy feedback states
@@ -58,6 +77,10 @@ export default function CreativeHubView({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCreative, setEditingCreative] = useState<Creative | null>(null);
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
+
+  // Schedule Modal State
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [schedulingCreative, setSchedulingCreative] = useState<Creative | null>(null);
 
   // Quick Caption Editor Modal State
   const [captionModalCreative, setCaptionModalCreative] = useState<Creative | null>(null);
@@ -120,71 +143,135 @@ export default function CreativeHubView({
     }
   };
 
+  // Load client observations
+  const loadObservations = async () => {
+    if (!currentUser) return;
+    try {
+      const userToken = localStorage.getItem('planner_user_token') || '';
+      const res = await fetch(`/api/client-observations${selectedClientId !== 'all' ? `?clientId=${selectedClientId}` : ''}`, {
+        headers: {
+          'x-user-id': currentUser.id,
+          'x-user-password': currentUser.password || '',
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+        }
+      });
+      const data = await res.json();
+      if (res.ok && data.success && Array.isArray(data.observations)) {
+        setObservations(data.observations);
+        try {
+          localStorage.setItem('creator_planner_client_observations', JSON.stringify(data.observations));
+        } catch (e) {}
+      }
+    } catch (e) {
+      console.warn('Using local observations backup:', e);
+    }
+  };
+
   useEffect(() => {
     loadCreatives();
-  }, [currentUser, selectedClientId]);
+    loadObservations();
+  }, [selectedClientId, currentUser]);
 
-  // Handle open modal for new creative
+  // Helper to compress image
+  const compressImageFile = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (readerEvent) => {
+        const image = new Image();
+        image.onload = () => {
+          const maxDim = 1200;
+          let width = image.width;
+          let height = image.height;
+
+          if (width > height) {
+            if (width > maxDim) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(image, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.85);
+            resolve(compressed);
+          } else {
+            resolve(readerEvent.target?.result as string);
+          }
+        };
+        image.onerror = () => {
+          resolve(readerEvent.target?.result as string);
+        };
+        image.src = readerEvent.target?.result as string;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Open Full Creative Modal
   const handleOpenCreateModal = () => {
     setEditingCreative(null);
     setFormTitle('');
     setFormDescription('');
-    setFormClientId(activeClientId || clients[0]?.id || 'default_client');
+    setFormClientId(selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'default_client'));
     setFormFormat('carousel');
     setFormPlatform('instagram');
     setFormAspectRatio('1:1');
     setFormAssets([]);
     setPreviewSlideIndex(0);
     setUploadError(null);
-    setIsSaving(false);
-    setIsProcessingFiles(false);
     setIsModalOpen(true);
   };
 
-  // Handle open modal for edit full creative
   const handleOpenEditModal = (creative: Creative) => {
     setEditingCreative(creative);
     setFormTitle(creative.title);
     setFormDescription(creative.description || '');
-    setFormClientId(creative.clientId || activeClientId || clients[0]?.id || 'default_client');
+    setFormClientId(creative.clientId);
     setFormFormat(creative.format);
-    setFormPlatform(creative.platform);
+    setFormPlatform(creative.platform || 'instagram');
     setFormAspectRatio(creative.aspectRatio || '1:1');
     setFormAssets(creative.assets || []);
     setPreviewSlideIndex(0);
     setUploadError(null);
-    setIsSaving(false);
-    setIsProcessingFiles(false);
     setIsModalOpen(true);
   };
 
-  // Handle open Quick Caption Editor
+  // Quick Caption Modal Handlers
   const handleOpenCaptionEditor = (creative: Creative) => {
     setCaptionModalCreative(creative);
     setCaptionText(creative.description || '');
     setIsCaptionModalOpen(true);
   };
 
-  // Handle Save Quick Caption
-  const handleSaveCaption = async (generateLinkImmediately = false) => {
+  const handleSaveQuickCaption = async (sendForApproval: boolean = false) => {
     if (!captionModalCreative) return;
     setIsSavingCaption(true);
+    const now = new Date().toISOString();
+    const newCaptionStatus: CreativeStatus = sendForApproval ? 'pending_approval' : (captionModalCreative.captionStatus || 'draft');
 
     const updatedCreative: Creative = {
       ...captionModalCreative,
-      description: captionText.trim(),
-      captionStatus: captionText.trim() ? 'pending_approval' : undefined,
-      updatedAt: new Date().toISOString()
+      description: captionText.trim() || undefined,
+      captionStatus: captionText.trim() ? newCaptionStatus : undefined,
+      updatedAt: now
     };
 
-    // Optimistic UI update
-    const updatedCreatives = creatives.map(c => c.id === captionModalCreative.id ? updatedCreative : c);
-    setCreatives(updatedCreatives);
+    const updated = creatives.map(c => c.id === captionModalCreative.id ? updatedCreative : c);
+    setCreatives(updated);
     try {
-      localStorage.setItem('creator_planner_creatives', JSON.stringify(updatedCreatives));
+      localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
     } catch (e) {}
 
-    // Save to server
     if (currentUser) {
       try {
         const userToken = localStorage.getItem('planner_user_token') || '';
@@ -199,144 +286,89 @@ export default function CreativeHubView({
           body: JSON.stringify(updatedCreative)
         });
       } catch (err) {
-        console.error('Failed to save caption on server:', err);
+        console.error('Failed to update caption on server:', err);
       }
     }
 
     setIsSavingCaption(false);
+    setIsCaptionModalOpen(false);
 
-    if (generateLinkImmediately) {
-      handleCopyCaptionLink(captionModalCreative.shareToken);
-    } else {
-      setIsCaptionModalOpen(false);
+    if (sendForApproval) {
+      handleCopyCaptionLink(updatedCreative.shareToken, updatedCreative.id);
     }
   };
 
-  // Handle AI Generate Caption using Gemini 3.7 Flash
+  // AI Caption Generation
   const handleGenerateAICaption = async () => {
     if (!captionModalCreative) return;
     setIsGeneratingAICaption(true);
     try {
+      const userToken = localStorage.getItem('planner_user_token') || '';
+      const clientObj = clients.find(c => c.id === captionModalCreative.clientId);
       const res = await fetch('/api/ai/caption-generator', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser?.id || '',
+          'x-user-password': currentUser?.password || '',
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+        },
         body: JSON.stringify({
           title: captionModalCreative.title,
-          clientName: captionModalCreative.clientName,
-          platform: captionModalCreative.platform,
           format: captionModalCreative.format,
+          clientName: clientObj?.name || captionModalCreative.clientName,
+          clientId: captionModalCreative.clientId,
+          currentCaption: captionText,
           tone: aiTone,
-          goal: aiGoal,
-          existingCaption: captionText
+          goal: aiGoal
         })
       });
       const data = await res.json();
-      if (res.ok && data.success && data.data?.caption) {
-        setCaptionText(data.data.caption);
+      if (res.ok && data.caption) {
+        setCaptionText(data.caption);
       } else {
-        alert('Não foi possível gerar a legenda no momento. Tente novamente.');
+        alert(data.error || 'Não foi possível gerar a legenda no momento.');
       }
     } catch (err) {
-      console.error('Error generating caption:', err);
-      alert('Erro ao conectar com a IA para gerar legenda.');
+      console.error('AI Caption generation error:', err);
+      alert('Erro de conexão ao gerar legenda por IA.');
     } finally {
       setIsGeneratingAICaption(false);
     }
   };
 
-  // Handle Apply AI generated carousel into creative form
-  const handleApplyAIToCreative = (carouselData: GeneratedCarouselData) => {
+  // Apply AI Carousel data
+  const handleApplyAIToCreative = (data: GeneratedCarouselData) => {
     setEditingCreative(null);
-    setFormTitle(carouselData.title || `Carrossel: ${carouselData.hook.slice(0, 40)}`);
-    setFormDescription(`${carouselData.caption}\n\n${(carouselData.hashtags || []).join(' ')}`);
-    setFormClientId(selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'default_client'));
+    setFormTitle(data.title);
+    setFormDescription(data.caption || '');
     setFormFormat('carousel');
     setFormPlatform('instagram');
     setFormAspectRatio('1:1');
     setFormAssets([]);
     setPreviewSlideIndex(0);
     setUploadError(null);
-    setIsSaving(false);
-    setIsProcessingFiles(false);
     setIsModalOpen(true);
+    setIsAIModalOpen(false);
   };
 
-  // Client-side image compression helper
-  const compressImageFile = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      if (file.type === 'image/svg+xml' || file.type === 'image/gif') {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve((e.target?.result as string) || '');
-        reader.onerror = () => resolve('');
-        reader.readAsDataURL(file);
-        return;
-      }
-
-      const img = new Image();
-      const objectUrl = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(objectUrl);
-        const maxWidth = 1600;
-        const maxHeight = 1600;
-        let width = img.width;
-        let height = img.height;
-
-        if (width > maxWidth || height > maxHeight) {
-          if (width > height) {
-            height = Math.round((height * maxWidth) / width);
-            width = maxWidth;
-          } else {
-            width = Math.round((width * maxHeight) / height);
-            height = maxHeight;
-          }
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          const reader = new FileReader();
-          reader.onload = (e) => resolve((e.target?.result as string) || '');
-          reader.readAsDataURL(file);
-          return;
-        }
-
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        resolve(dataUrl);
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
-        const reader = new FileReader();
-        reader.onload = (e) => resolve((e.target?.result as string) || '');
-        reader.readAsDataURL(file);
-      };
-      img.src = objectUrl;
-    });
-  };
-
-  // Process uploaded files (Carousels up to 20 images or Videos up to 15GB)
+  // Upload Assets
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    setUploadError(null);
+    if (formAssets.length + files.length > 20) {
+      setUploadError('Um carrossel permite no máximo 20 imagens.');
+      return;
+    }
+
     setIsProcessingFiles(true);
+    setUploadError(null);
 
     try {
-      const remainingSlots = 20 - formAssets.length;
-      if (remainingSlots <= 0) {
-        setUploadError('Limite de 20 slides por carrossel atingido.');
-        setIsProcessingFiles(false);
-        return;
-      }
-
-      const filesToProcess = files.slice(0, remainingSlots);
       const newAssets: CreativeAsset[] = [];
-
-      for (let i = 0; i < filesToProcess.length; i++) {
-        const file = filesToProcess[i];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
         const isVideo = file.type.startsWith('video/');
 
         if (isVideo) {
@@ -378,7 +410,6 @@ export default function CreativeHubView({
     }
   };
 
-  // Remove asset from form
   const handleRemoveAsset = (index: number) => {
     const updated = formAssets.filter((_, idx) => idx !== index).map((asset, idx) => ({
       ...asset,
@@ -390,7 +421,6 @@ export default function CreativeHubView({
     }
   };
 
-  // Move asset order in carousel
   const handleMoveAsset = (index: number, direction: 'left' | 'right') => {
     if (
       (direction === 'left' && index === 0) ||
@@ -438,6 +468,9 @@ export default function CreativeHubView({
       platform: formPlatform,
       status: targetStatus,
       captionStatus: formDescription.trim() ? (editingCreative?.captionStatus || 'pending_approval') : undefined,
+      scheduledDate: editingCreative?.scheduledDate,
+      scheduledTime: editingCreative?.scheduledTime,
+      postedDate: editingCreative?.postedDate,
       assets: formAssets,
       aspectRatio: formAspectRatio,
       shareToken: editingCreative?.shareToken || `token_${Date.now()}_${Math.random().toString(36).substr(2, 10)}`,
@@ -445,7 +478,6 @@ export default function CreativeHubView({
       updatedAt: now
     };
 
-    // Optimistic state update
     if (editingCreative) {
       const updated = creatives.map(c => c.id === editingCreative.id ? creativeData : c);
       setCreatives(updated);
@@ -460,7 +492,6 @@ export default function CreativeHubView({
       } catch (e) {}
     }
 
-    // Save to server
     if (currentUser) {
       try {
         const userToken = localStorage.getItem('planner_user_token') || '';
@@ -510,79 +541,267 @@ export default function CreativeHubView({
     }
   };
 
-  // ==========================================
-  // LINK SHARING & COPYING HANDLERS
-  // ==========================================
+  // General Status Update Helper
+  const handleUpdateCreativeStatus = async (creativeId: string, newStatus: CreativeStatus, extraFields: Partial<Creative> = {}) => {
+    const target = creatives.find(c => c.id === creativeId);
+    if (!target) return;
 
-  // 1. Copy Individual Client Approval Link (Full Post)
-  const handleCopyLink = async (shareToken: string) => {
+    const now = new Date().toISOString();
+    const updatedCreative: Creative = {
+      ...target,
+      status: newStatus,
+      ...extraFields,
+      updatedAt: now
+    };
+
+    const updated = creatives.map(c => c.id === creativeId ? updatedCreative : c);
+    setCreatives(updated);
+    try {
+      localStorage.setItem('creator_planner_creatives', JSON.stringify(updated));
+    } catch (e) {}
+
+    if (currentUser) {
+      try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
+        await fetch('/api/creatives', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': currentUser.id,
+            'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+          },
+          body: JSON.stringify(updatedCreative)
+        });
+      } catch (err) {
+        console.error('Failed to update creative status on server:', err);
+      }
+    }
+  };
+
+  // Specific Action Handlers
+  const handleMarkAsPosted = (creative: Creative) => {
+    const now = new Date().toISOString();
+    handleUpdateCreativeStatus(creative.id, 'posted', { postedDate: now });
+    setToastMessage('🚀 Criativo marcado como postado e movido para a aba Postados!');
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleOpenScheduleModal = (creative: Creative) => {
+    setSchedulingCreative(creative);
+    setIsScheduleModalOpen(true);
+  };
+
+  const handleConfirmSchedule = (creative: Creative, scheduledDate: string, scheduledTime: string) => {
+    handleUpdateCreativeStatus(creative.id, 'scheduled', { scheduledDate, scheduledTime });
+    setToastMessage(`📅 Criativo agendado para ${new Date(scheduledDate + 'T12:00:00').toLocaleDateString('pt-BR')} às ${scheduledTime} e movido para Agendados!`);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  const handleMoveToApproved = (creative: Creative) => {
+    handleUpdateCreativeStatus(creative.id, 'approved');
+    setToastMessage('🔵 Criativo movido para a aba Aprovados!');
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleRestoreCreative = (creative: Creative) => {
+    handleUpdateCreativeStatus(creative.id, 'pending_approval', { clientFeedback: undefined });
+    setToastMessage('🔄 Criativo restaurado para fila de aprovação!');
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleResubmitForApproval = (creative: Creative) => {
+    handleUpdateCreativeStatus(creative.id, 'pending_approval', { 
+      captionStatus: creative.description ? 'pending_approval' : undefined,
+      clientFeedback: undefined,
+      captionFeedback: undefined
+    });
+    setToastMessage('🚀 Reenviado para aprovação do cliente!');
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Client Observations Handlers
+  const handleSaveFeedbackAsObservation = async (
+    creative: Creative,
+    feedbackText: string,
+    type: 'visual' | 'caption'
+  ) => {
+    if (!feedbackText.trim()) return;
+    const clientName = creative.clientName || clients.find(c => c.id === creative.clientId)?.name || 'Cliente';
+    const title = type === 'visual'
+      ? `Ajuste Visual: ${creative.title}`
+      : `Regra de Copy/Legenda: ${creative.title}`;
+
+    const newObs: ClientObservation = {
+      id: `obs_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      userId: currentUser?.id || 'default_user',
+      clientId: creative.clientId,
+      clientName: clientName,
+      title: title,
+      content: feedbackText.trim(),
+      category: type === 'caption' ? 'caption' : 'visual',
+      creativeId: creative.id,
+      creativeTitle: creative.title,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await handleSaveObservation(newObs);
+
+    const key = `${creative.id}_${type}`;
+    setSavedFeedbackMap(prev => ({ ...prev, [key]: true }));
+
+    setToastMessage(`✓ Salvo nas Regras de ${clientName}!`);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const isFeedbackSaved = (creativeId: string, type: 'visual' | 'caption'): boolean => {
+    const key = `${creativeId}_${type}`;
+    if (savedFeedbackMap[key]) return true;
+    return observations.some(o => o.creativeId === creativeId && (type === 'caption' ? o.category === 'caption' : o.category === 'visual'));
+  };
+
+  const handleSaveObservation = async (observation: Partial<ClientObservation>): Promise<boolean> => {
+    const fullObs: ClientObservation = {
+      id: observation.id || `obs_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      userId: observation.userId || currentUser?.id || 'default_user',
+      clientId: observation.clientId || selectedClientId || 'default_client',
+      clientName: observation.clientName || 'Cliente',
+      title: observation.title || 'Observação',
+      content: observation.content || '',
+      category: observation.category || 'general',
+      creativeId: observation.creativeId,
+      creativeTitle: observation.creativeTitle,
+      createdAt: observation.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const existingIndex = observations.findIndex(o => o.id === fullObs.id);
+    let updated: ClientObservation[];
+    if (existingIndex >= 0) {
+      updated = observations.map(o => o.id === fullObs.id ? fullObs : o);
+    } else {
+      updated = [fullObs, ...observations];
+    }
+    setObservations(updated);
+    try {
+      localStorage.setItem('creator_planner_client_observations', JSON.stringify(updated));
+    } catch (e) {}
+
+    if (currentUser) {
+      try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
+        await fetch('/api/client-observations', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': currentUser.id,
+            'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+          },
+          body: JSON.stringify(fullObs)
+        });
+      } catch (err) {
+        console.error('Failed to save observation to server:', err);
+      }
+    }
+    return true;
+  };
+
+  const handleDeleteObservation = async (id: string): Promise<boolean> => {
+    const updated = observations.filter(o => o.id !== id);
+    setObservations(updated);
+    try {
+      localStorage.setItem('creator_planner_client_observations', JSON.stringify(updated));
+    } catch (e) {}
+
+    if (currentUser) {
+      try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
+        await fetch(`/api/client-observations/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'x-user-id': currentUser.id,
+            'x-user-password': currentUser.password || '',
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+          }
+        });
+      } catch (err) {
+        console.error('Failed to delete observation on server:', err);
+      }
+    }
+    return true;
+  };
+
+  // Link Handlers
+  const handleCopyLink = async (shareToken?: string, fallbackId?: string) => {
     const origin = window.location.origin;
-    const approvalUrl = `${origin}/aprovar?creativeToken=${shareToken}`;
+    const token = shareToken || fallbackId || '';
+    const approvalUrl = `${origin}/aprovar?creativeToken=${encodeURIComponent(token)}`;
     const success = await copyToClipboard(approvalUrl);
     if (success) {
-      setCopiedToken(shareToken);
+      setCopiedToken(token);
       setTimeout(() => setCopiedToken(null), 3000);
     }
   };
 
-  // 2. Copy Individual Caption Approval Link (Focus on Caption)
-  const handleCopyCaptionLink = async (shareToken: string) => {
+  const handleCopyCaptionLink = async (shareToken?: string, fallbackId?: string) => {
     const origin = window.location.origin;
-    const approvalUrl = `${origin}/aprovar?creativeToken=${shareToken}&focus=caption`;
+    const token = shareToken || fallbackId || '';
+    const approvalUrl = `${origin}/aprovar?creativeToken=${encodeURIComponent(token)}&focus=caption`;
     const success = await copyToClipboard(approvalUrl);
     if (success) {
-      setCopiedCaptionToken(shareToken);
+      setCopiedCaptionToken(token);
       setTimeout(() => setCopiedCaptionToken(null), 3000);
     }
   };
 
-  // 3. Share Individual Post on WhatsApp
-  const handleShareWhatsApp = (creative: Creative) => {
-    const origin = window.location.origin;
-    const approvalUrl = `${origin}/aprovar?creativeToken=${creative.shareToken}`;
-    const message = encodeURIComponent(
-      `Olá! O criativo "${creative.title}" está pronto para sua aprovação no nosso portal.\n\n` +
-      `🔗 Acesse para visualizar em formato real e aprovar com 1 clique:\n${approvalUrl}`
-    );
-    window.open(`https://wa.me/?text=${message}`, '_blank');
-  };
-
-  // 4. Share Individual Caption on WhatsApp
-  const handleShareCaptionWhatsApp = (creative: Creative) => {
-    const origin = window.location.origin;
-    const approvalUrl = `${origin}/aprovar?creativeToken=${creative.shareToken}&focus=caption`;
-    const message = encodeURIComponent(
-      `Olá! Adicionei a legenda para o criativo "${creative.title}".\n\n` +
-      `✍️ Revise o texto e aprove com 1 clique pelo link:\n${approvalUrl}`
-    );
-    window.open(`https://wa.me/?text=${message}`, '_blank');
-  };
-
-  // 5. Copy General Client Approval Hub Link (All Creatives)
   const handleCopyGeneralLink = async (targetClientId?: string) => {
     const origin = window.location.origin;
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
-    const hubUrl = `${origin}/aprovar?client=${resolvedClient}&mode=hub`;
-    const success = await copyToClipboard(hubUrl);
+    const generalUrl = `${origin}/aprovar?client=${resolvedClient}&mode=hub`;
+    const success = await copyToClipboard(generalUrl);
     if (success) {
       setCopiedGeneralLink(true);
       setTimeout(() => setCopiedGeneralLink(false), 3000);
     }
   };
 
-  // 6. Copy General Caption Approval Hub Link (All Captions)
   const handleCopyGeneralCaptionLink = async (targetClientId?: string) => {
     const origin = window.location.origin;
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
-    const hubUrl = `${origin}/aprovar?client=${resolvedClient}&focus=caption&mode=hub`;
-    const success = await copyToClipboard(hubUrl);
+    const generalUrl = `${origin}/aprovar?client=${resolvedClient}&focus=caption&mode=hub`;
+    const success = await copyToClipboard(generalUrl);
     if (success) {
       setCopiedGeneralCaptionLink(true);
       setTimeout(() => setCopiedGeneralCaptionLink(false), 3000);
     }
   };
 
-  // 7. Share General Client Approval Hub on WhatsApp
+  const handleShareWhatsApp = (creative: Creative) => {
+    const origin = window.location.origin;
+    const approvalUrl = `${origin}/aprovar?creativeToken=${encodeURIComponent(creative.shareToken)}`;
+    const clientName = creative.clientName || 'Cliente';
+    const message = encodeURIComponent(
+      `Olá ${clientName}! Preparei a prévia do criativo "${creative.title}" para sua aprovação:\n\n` +
+      `🔗 Acesse o link: ${approvalUrl}\n\n` +
+      `Por favor, avalie a arte e aprove ou comente com seus ajustes direto pela página!`
+    );
+    window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
+  const handleShareCaptionWhatsApp = (creative: Creative) => {
+    const origin = window.location.origin;
+    const approvalUrl = `${origin}/aprovar?creativeToken=${encodeURIComponent(creative.shareToken)}&focus=caption`;
+    const clientName = creative.clientName || 'Cliente';
+    const message = encodeURIComponent(
+      `Olá ${clientName}! Segue a legenda do post "${creative.title}" para você revisar e aprovar:\n\n` +
+      `✍️ Link de aprovação da legenda: ${approvalUrl}\n\n` +
+      `Você pode aprovar com 1 clique ou sugerir qualquer mudança direto na página!`
+    );
+    window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
   const handleShareGeneralWhatsApp = (targetClientId?: string) => {
     const origin = window.location.origin;
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
@@ -597,7 +816,6 @@ export default function CreativeHubView({
     window.open(`https://wa.me/?text=${message}`, '_blank');
   };
 
-  // 8. Share General Caption Approval Hub on WhatsApp
   const handleShareGeneralCaptionWhatsApp = (targetClientId?: string) => {
     const origin = window.location.origin;
     const resolvedClient = targetClientId || (selectedClientId !== 'all' ? selectedClientId : (clients[0]?.id || 'all'));
@@ -612,7 +830,6 @@ export default function CreativeHubView({
     window.open(`https://wa.me/?text=${message}`, '_blank');
   };
 
-  // Open Preview as client
   const handleViewAsClient = (shareToken: string, focus: 'all' | 'visual' | 'caption' = 'all') => {
     setPreviewingFocus(focus);
     setPreviewingShareToken(shareToken);
@@ -624,17 +841,35 @@ export default function CreativeHubView({
     setPreviewingHubClientId(resolvedClient);
   };
 
-  // Filtered creatives list
-  const filteredCreatives = creatives.filter(c => {
+  // Dynamic counts for submenus
+  const scopedCreatives = creatives.filter(c => {
     if (selectedClientId !== 'all' && c.clientId !== selectedClientId) return false;
+    return true;
+  });
+
+  const changesCount = scopedCreatives.filter(c => c.status === 'changes_requested' || c.captionStatus === 'changes_requested').length;
+  const approvedCount = scopedCreatives.filter(c => (c.status === 'approved' || c.captionStatus === 'approved') && c.status !== 'posted' && c.status !== 'published' && c.status !== 'scheduled' && c.status !== 'rejected').length;
+  const scheduledCount = scopedCreatives.filter(c => c.status === 'scheduled').length;
+  const postedCount = scopedCreatives.filter(c => c.status === 'posted' || c.status === 'published').length;
+  const rejectedCount = scopedCreatives.filter(c => c.status === 'rejected').length;
+
+  // Filtered creatives list according to active submenu and search/format filters
+  const filteredCreatives = scopedCreatives.filter(c => {
     if (filterFormat !== 'all' && c.format !== filterFormat) return false;
-    if (filterStatus !== 'all' && c.status !== filterStatus) return false;
-    
-    if (filterCaptionStatus !== 'all' && c.status === 'rejected') return false;
-    if (filterCaptionStatus === 'missing' && Boolean(c.description?.trim())) return false;
-    if (filterCaptionStatus === 'has_caption' && !c.description?.trim()) return false;
-    if (filterCaptionStatus === 'pending_approval' && (!c.description?.trim() || (c.captionStatus && c.captionStatus !== 'pending_approval' && c.captionStatus !== 'draft'))) return false;
-    if (filterCaptionStatus === 'approved' && (!c.description?.trim() || c.captionStatus !== 'approved')) return false;
+
+    // Submenu Filtering Logic:
+    if (activeSubMenu === 'changes_requested') {
+      if (c.status !== 'changes_requested' && c.captionStatus !== 'changes_requested') return false;
+    } else if (activeSubMenu === 'approved') {
+      const isAppr = (c.status === 'approved' || c.captionStatus === 'approved');
+      if (!isAppr || c.status === 'posted' || c.status === 'published' || c.status === 'scheduled' || c.status === 'rejected') return false;
+    } else if (activeSubMenu === 'scheduled') {
+      if (c.status !== 'scheduled') return false;
+    } else if (activeSubMenu === 'posted') {
+      if (c.status !== 'posted' && c.status !== 'published') return false;
+    } else if (activeSubMenu === 'rejected') {
+      if (c.status !== 'rejected') return false;
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -646,527 +881,721 @@ export default function CreativeHubView({
     return true;
   });
 
-  // Calculate stats
-  const totalCount = creatives.length;
-  const pendingCount = creatives.filter(c => c.status === 'pending_approval' || c.status === 'draft').length;
-  const approvedCount = creatives.filter(c => c.status === 'approved').length;
-  const changesCount = creatives.filter(c => c.status === 'changes_requested').length;
-  
-  const validCaptionCreatives = creatives.filter(c => c.status !== 'rejected');
-  const totalWithCaption = validCaptionCreatives.filter(c => Boolean(c.description?.trim())).length;
-  const pendingCaptionsCount = validCaptionCreatives.filter(c => Boolean(c.description?.trim()) && (c.captionStatus === 'pending_approval' || !c.captionStatus || c.captionStatus === 'draft')).length;
-  const missingCaptionsCount = validCaptionCreatives.filter(c => !c.description?.trim()).length;
-
-  const currentSelectedClientObj = clients.find(c => c.id === selectedClientId);
-
   return (
     <div className="space-y-6 animate-fade-in font-sans">
       
-      {/* 1. HERO HEADER WITH STATS & CTA */}
-      <div className="p-6 md:p-7 bg-[#121218] rounded-2xl border border-[#24242D] relative shadow-sm">
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2 max-w-xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#8B5CF6]/10 border border-[#8B5CF6]/25 text-[#A78BFA] text-xs font-mono font-bold uppercase tracking-wider">
-              <Layers size={14} className="text-[#8B5CF6]" />
-              <span>Central de Criativos & Aprovação de Legendas</span>
-            </div>
-            <h1 className="text-2xl md:text-3xl font-display font-bold text-[#F2F2F5] tracking-tight">
-              Organize Carrosséis, Vídeos e Legendas
-            </h1>
-            <p className="text-xs md:text-sm text-[#92929F] leading-relaxed">
-              Envie artes visuais, carrosséis de até 20 slides ou vídeos de até 15GB. Se enviar sem legenda, você pode <strong className="text-[#F2F2F5]">adicionar e gerar o link de aprovação de legenda individual ou da central toda</strong> com 1 clique a qualquer momento.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => setIsAIModalOpen(true)}
-              className="px-4 py-2.5 rounded-xl font-display font-semibold text-xs bg-[#17171F] hover:bg-[#20202B] text-[#F2F2F5] border border-[#24242D] transition-all flex items-center gap-2 cursor-pointer"
-            >
-              <Sparkles size={16} className="text-[#A78BFA]" />
-              <span>Gerar Textos para Carrossel (IA)</span>
-            </button>
-
-            <button
-              onClick={handleOpenCreateModal}
-              className="px-5 py-2.5 rounded-xl font-display font-bold text-xs bg-white hover:bg-zinc-100 text-black shadow-sm transition-all flex items-center gap-2 cursor-pointer"
-            >
-              <Plus size={16} strokeWidth={2.5} />
-              <span>Novo Criativo</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 1.1 PROMINENT GENERAL LINKS BANNERS (MÍDIAS & LEGENDAS DA CENTRAL) */}
-        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-          
-          {/* GENERAL HUB: CRIATIVOS & MÍDIAS */}
-          <div className="p-4 md:p-5 bg-[#17171F] rounded-xl border border-[#24242D] flex flex-col justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-md bg-[#8B5CF6]/15 text-[#A78BFA] border border-[#8B5CF6]/30 text-[10px] font-mono font-bold uppercase">
-                  Central Geral de Criativos
-                </span>
-                <h3 className="text-xs font-semibold text-[#F2F2F5] font-display">
-                  Link Geral da Marca {currentSelectedClientObj ? `(${currentSelectedClientObj.name})` : ''}
-                </h3>
-              </div>
-              <p className="text-xs text-[#92929F]">
-                Aprovação completa dos posts e carrosséis ({pendingCount} pendentes).
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => handleCopyGeneralLink()}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
-                  copiedGeneralLink
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-[#8B5CF6] hover:bg-[#7C3AED] text-white'
-                }`}
-              >
-                {copiedGeneralLink ? <Check size={14} /> : <Copy size={14} />}
-                <span>{copiedGeneralLink ? 'Link Copiado!' : 'Copiar Link da Central'}</span>
-              </button>
-
-              <button
-                onClick={() => handleShareGeneralWhatsApp()}
-                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-emerald-400 border border-[#24242D] transition-all cursor-pointer"
-                title="Enviar no WhatsApp"
-              >
-                <Share2 size={14} />
-              </button>
-
-              <button
-                onClick={() => handlePreviewGeneralHub(undefined, 'all')}
-                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-[#92929F] hover:text-[#F2F2F5] border border-[#24242D] transition-all cursor-pointer"
-                title="Visualizar como Cliente"
-              >
-                <ExternalLink size={14} />
-              </button>
-            </div>
-          </div>
-
-          {/* GENERAL HUB: APROVAÇÃO DE LEGENDAS DA CENTRAL TODA */}
-          <div className="p-4 md:p-5 bg-gradient-to-r from-[#1b1712] to-[#17171F] rounded-xl border border-amber-500/25 flex flex-col justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold uppercase flex items-center gap-1">
-                  <AlignLeft size={11} />
-                  <span>Central Geral de Legendas</span>
-                </span>
-                <h3 className="text-xs font-semibold text-white font-display">
-                  Aprovação de Todas as Legendas
-                </h3>
-              </div>
-              <p className="text-xs text-zinc-400">
-                Gera um link exclusivo para o cliente aprovar todas as legendas e copys de uma vez só.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => handleCopyGeneralCaptionLink()}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
-                  copiedGeneralCaptionLink
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-amber-600 hover:bg-amber-500 text-white'
-                }`}
-              >
-                {copiedGeneralCaptionLink ? <Check size={14} /> : <Copy size={14} />}
-                <span>{copiedGeneralCaptionLink ? 'Link de Legendas Copiado!' : 'Copiar Link de Legendas da Central'}</span>
-              </button>
-
-              <button
-                onClick={() => handleShareGeneralCaptionWhatsApp()}
-                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-amber-400 border border-amber-500/30 transition-all cursor-pointer"
-                title="Enviar Legendas da Central no WhatsApp"
-              >
-                <Share2 size={14} />
-              </button>
-
-              <button
-                onClick={() => handlePreviewGeneralHub(undefined, 'caption')}
-                className="p-2 rounded-xl bg-[#121218] hover:bg-[#1E1E26] text-zinc-400 hover:text-white border border-[#24242D] transition-all cursor-pointer"
-                title="Visualizar Central de Legendas como Cliente"
-              >
-                <ExternalLink size={14} />
-              </button>
-            </div>
-          </div>
-
-        </div>
-
-        {/* STATS COUNTERS BAR */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-5 border-t border-[#24242D]">
-          <div className="bg-[#17171F] border border-[#24242D] rounded-xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-[#686873] block mb-0.5">Total Criativos</span>
-            <div className="text-xl font-bold font-display text-[#F2F2F5]">{totalCount}</div>
-          </div>
-          <div className="bg-[#17171F] border border-[#F97316]/20 rounded-xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-[#F97316] block mb-0.5 flex items-center gap-1">
-              <Clock size={11} /> Aguardando Aprovação
-            </span>
-            <div className="text-xl font-bold font-display text-[#F97316]">{pendingCount}</div>
-          </div>
-          <div className="bg-[#17171F] border border-blue-500/20 rounded-xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-blue-400 block mb-0.5 flex items-center gap-1">
-              <CheckCircle2 size={11} /> Aprovados
-            </span>
-            <div className="text-xl font-bold font-display text-blue-400">{approvedCount}</div>
-          </div>
-          <div className="bg-[#17171F] border border-amber-500/20 rounded-xl p-3.5">
-            <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
-              <AlignLeft size={11} /> Com Legenda Cadastrada
-            </span>
-            <div className="text-xl font-bold font-display text-amber-400">{totalWithCaption} <span className="text-xs text-zinc-500 font-normal">({missingCaptionsCount} sem legenda)</span></div>
-          </div>
-        </div>
-      </div>
-
-      {/* 2. FILTER & SEARCH TOOLBAR */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-[#121218] border border-[#24242D] p-3.5 rounded-xl shadow-sm">
+      {/* ========================================================================= */}
+      {/* 1. TOP SUBMENUS NAVIGATION BAR (STATUS WORKFLOW)                           */}
+      {/* ========================================================================= */}
+      <div className="flex items-center gap-2 p-1.5 bg-[#121218] border border-[#24242D] rounded-2xl overflow-x-auto shadow-sm">
         
-        {/* Search Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#686873]" />
-          <input
-            type="text"
-            placeholder="Buscar por título, cliente ou legenda..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[#17171F] border border-[#24242D] rounded-xl pl-9 pr-4 py-2 text-xs text-[#F2F2F5] placeholder-[#686873] focus:outline-none focus:border-[#8B5CF6]/50 transition-all"
-          />
-        </div>
+        {/* SUBMENU 1: CENTRAL / DASHBOARD */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('dashboard')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'dashboard'
+              ? 'bg-[#8B5CF6] text-white shadow-md font-bold'
+              : 'text-[#92929F] hover:text-[#F2F2F5] hover:bg-[#17171F]'
+          }`}
+        >
+          <LayoutGrid size={15} />
+          <span>Central (Dashboard)</span>
+        </button>
 
-        {/* Filter dropdowns */}
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          
-          {/* Client Filter */}
-          <select
-            value={selectedClientId}
-            onChange={(e) => setSelectedClientId(e.target.value)}
-            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
-          >
-            <option value="all">Todos os Clientes</option>
-            {clients.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+        {/* SUBMENU 2: AGUARDANDO MUDANÇA */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('changes_requested')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'changes_requested'
+              ? 'bg-amber-500 text-black shadow-md font-bold'
+              : 'text-[#92929F] hover:text-amber-400 hover:bg-[#17171F]'
+          }`}
+        >
+          <MessageSquare size={15} />
+          <span>Aguardando Mudança</span>
+          {changesCount > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+              activeSubMenu === 'changes_requested' ? 'bg-black text-amber-400' : 'bg-amber-500/20 text-amber-400'
+            }`}>
+              {changesCount}
+            </span>
+          )}
+        </button>
 
-          {/* Format Filter */}
-          <select
-            value={filterFormat}
-            onChange={(e) => setFilterFormat(e.target.value)}
-            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
-          >
-            <option value="all">Todos os Formatos</option>
-            <option value="carousel">🎠 Carrossel (Até 20 imagens)</option>
-            <option value="video">🎬 Vídeo (Até 15GB)</option>
-            <option value="single_image">🖼️ Imagem Única</option>
-          </select>
+        {/* SUBMENU 3: APROVADOS */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('approved')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'approved'
+              ? 'bg-blue-600 text-white shadow-md font-bold'
+              : 'text-[#92929F] hover:text-blue-400 hover:bg-[#17171F]'
+          }`}
+        >
+          <CheckCircle2 size={15} />
+          <span>Aprovados</span>
+          {approvedCount > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+              activeSubMenu === 'approved' ? 'bg-white text-blue-600' : 'bg-blue-500/20 text-blue-400'
+            }`}>
+              {approvedCount}
+            </span>
+          )}
+        </button>
 
-          {/* Status Filter */}
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
-          >
-            <option value="all">Status do Visual</option>
-            <option value="pending_approval">⏳ Aguardando Aprovação</option>
-            <option value="approved">🔵 Aprovados</option>
-            <option value="changes_requested">⚠️ Ajustes Solicitados</option>
-          </select>
+        {/* SUBMENU 4: AGENDADOS */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('scheduled')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'scheduled'
+              ? 'bg-purple-600 text-white shadow-md font-bold'
+              : 'text-[#92929F] hover:text-purple-400 hover:bg-[#17171F]'
+          }`}
+        >
+          <Calendar size={15} />
+          <span>Agendados</span>
+          {scheduledCount > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+              activeSubMenu === 'scheduled' ? 'bg-white text-purple-600' : 'bg-purple-500/20 text-purple-400'
+            }`}>
+              {scheduledCount}
+            </span>
+          )}
+        </button>
 
-          {/* Caption Filter */}
-          <select
-            value={filterCaptionStatus}
-            onChange={(e) => setFilterCaptionStatus(e.target.value)}
-            className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-amber-500/50 cursor-pointer"
-          >
-            <option value="all">Filtro de Legendas</option>
-            <option value="missing">⚠️ Sem Legenda (Adicionar)</option>
-            <option value="has_caption">✍️ Com Legenda</option>
-            <option value="pending_approval">⏳ Legendas Pendentes</option>
-            <option value="approved">✅ Legendas Aprovadas</option>
-          </select>
+        {/* SUBMENU 5: POSTADOS */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('posted')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'posted'
+              ? 'bg-emerald-600 text-white shadow-md font-bold'
+              : 'text-[#92929F] hover:text-emerald-400 hover:bg-[#17171F]'
+          }`}
+        >
+          <Rocket size={15} />
+          <span>Postados</span>
+          {postedCount > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+              activeSubMenu === 'posted' ? 'bg-white text-emerald-600' : 'bg-emerald-500/20 text-emerald-400'
+            }`}>
+              {postedCount}
+            </span>
+          )}
+        </button>
 
-        </div>
+        {/* SUBMENU 6: REJEITADOS */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('rejected')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'rejected'
+              ? 'bg-red-600 text-white shadow-md font-bold'
+              : 'text-[#92929F] hover:text-red-400 hover:bg-[#17171F]'
+          }`}
+        >
+          <XCircle size={15} />
+          <span>Rejeitados</span>
+          {rejectedCount > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+              activeSubMenu === 'rejected' ? 'bg-white text-red-600' : 'bg-red-500/20 text-red-400'
+            }`}>
+              {rejectedCount}
+            </span>
+          )}
+        </button>
+
+        {/* SUBMENU 7: OBSERVAÇÕES DO CLIENTE */}
+        <button
+          type="button"
+          onClick={() => setActiveSubMenu('observations')}
+          className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeSubMenu === 'observations'
+              ? 'bg-amber-500 text-black shadow-md font-bold'
+              : 'text-[#92929F] hover:text-amber-400 hover:bg-[#17171F]'
+          }`}
+        >
+          <Bookmark size={15} />
+          <span>Observações do Cliente</span>
+          {observations.length > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+              activeSubMenu === 'observations' ? 'bg-black text-amber-400' : 'bg-amber-500/20 text-amber-400'
+            }`}>
+              {observations.length}
+            </span>
+          )}
+        </button>
+
       </div>
 
-      {/* 3. CREATIVES GRID VIEW */}
-      {filteredCreatives.length === 0 ? (
-        <div className="bg-[#121218] border border-[#24242D] rounded-2xl p-12 text-center space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-[#17171F] border border-[#24242D] flex items-center justify-center text-[#686873] mx-auto">
-            <Layers size={32} />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-base font-semibold text-[#F2F2F5] font-display">Nenhum criativo encontrado</h3>
-            <p className="text-xs text-[#92929F] max-w-sm mx-auto">
-              Crie seu primeiro post em carrossel ou vídeo para enviar para aprovação do cliente.
-            </p>
-          </div>
-          <button
-            onClick={handleOpenCreateModal}
-            className="px-4 py-2 rounded-xl bg-white hover:bg-zinc-100 text-black text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-2"
-          >
-            <Plus size={16} />
-            <span>Criar Primeiro Post</span>
-          </button>
-        </div>
+      {/* ========================================================================= */}
+      {/* 2. RENDER SUBMENU VIEW                                                    */}
+      {/* ========================================================================= */}
+      {activeSubMenu === 'dashboard' ? (
+        /* DASHBOARD RESUMO SUBMENU */
+        <CreativeHubDashboard
+          creatives={creatives}
+          clients={clients}
+          selectedClientId={selectedClientId}
+          onNavigateSubMenu={setActiveSubMenu}
+          onOpenCreateModal={handleOpenCreateModal}
+          onOpenAIModal={() => setIsAIModalOpen(true)}
+          onOpenObservationsModal={() => setIsObservationsModalOpen(true)}
+          onOpenCaptionEditor={handleOpenCaptionEditor}
+          onOpenEditModal={handleOpenEditModal}
+          onMarkAsPosted={handleMarkAsPosted}
+          onOpenScheduleModal={handleOpenScheduleModal}
+          onViewAsClient={handleViewAsClient}
+          onCopyGeneralLink={handleCopyGeneralLink}
+          onCopyGeneralCaptionLink={handleCopyGeneralCaptionLink}
+          onShareGeneralWhatsApp={handleShareGeneralWhatsApp}
+          onShareGeneralCaptionWhatsApp={handleShareGeneralCaptionWhatsApp}
+          onPreviewGeneralHub={handlePreviewGeneralHub}
+          copiedGeneralLink={copiedGeneralLink}
+          copiedGeneralCaptionLink={copiedGeneralCaptionLink}
+          observationsCount={observations.length}
+        />
+      ) : activeSubMenu === 'observations' ? (
+        /* SUBMENU: OBSERVAÇÕES DO CLIENTE (DIRETRIZES & REGRAS) */
+        <ClientObservationsSection
+          clients={clients}
+          selectedClientId={selectedClientId}
+          onSelectClientId={setSelectedClientId}
+          currentUser={currentUser}
+          observations={observations}
+          onSaveObservation={handleSaveObservation}
+          onDeleteObservation={handleDeleteObservation}
+        />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredCreatives.map((creative) => {
-            const firstAsset = creative.assets?.[0];
-            const isCarousel = creative.format === 'carousel' || (creative.assets || []).length > 1;
-            const isVideo = creative.format === 'video' || firstAsset?.type === 'video';
-            const isPending = creative.status === 'pending_approval' || creative.status === 'draft';
-            const isApproved = creative.status === 'approved';
-            const isChanges = creative.status === 'changes_requested';
+        /* TAB LIST VIEW: AGUARDANDO MUDANÇA | APROVADOS | AGENDADOS | POSTADOS | REJEITADOS */
+        <div className="space-y-5">
+          
+          {/* TAB HEADER INFO & ACTIONS */}
+          <div className="p-5 bg-[#121218] rounded-2xl border border-[#24242D] flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                  activeSubMenu === 'changes_requested' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' :
+                  activeSubMenu === 'approved' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40' :
+                  activeSubMenu === 'scheduled' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40' :
+                  activeSubMenu === 'posted' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' :
+                  'bg-red-500/20 text-red-300 border border-red-500/40'
+                }`}>
+                  {activeSubMenu === 'changes_requested' ? 'Ajustes Solicitados' :
+                   activeSubMenu === 'approved' ? 'Aprovados pelo Cliente' :
+                   activeSubMenu === 'scheduled' ? 'Publicações Agendadas' :
+                   activeSubMenu === 'posted' ? 'Publicações Concluídas' :
+                   'Criativos Reprovados'}
+                </span>
+                <span className="text-xs text-zinc-400 font-mono">
+                  ({filteredCreatives.length} {filteredCreatives.length === 1 ? 'item' : 'itens'})
+                </span>
+              </div>
+              <h2 className="text-lg font-bold text-white font-display">
+                {activeSubMenu === 'changes_requested' && 'Aguardando Mudança (Visual ou Legenda)'}
+                {activeSubMenu === 'approved' && 'Aprovados (Prontos para Agendar ou Postar)'}
+                {activeSubMenu === 'scheduled' && 'Agendados (Programados para Publicação)'}
+                {activeSubMenu === 'posted' && 'Postados (Histórico de Publicações)'}
+                {activeSubMenu === 'rejected' && 'Rejeitados (Descartados ou para Revisão)'}
+              </h2>
+              <p className="text-xs text-zinc-400">
+                {activeSubMenu === 'changes_requested' && 'Estes criativos receberam feedback do cliente para ajustes visuais ou de texto.'}
+                {activeSubMenu === 'approved' && 'Itens aprovados. Clique em "Marcar como Postado" ou "Agendar" para avançar o fluxo.'}
+                {activeSubMenu === 'scheduled' && 'Criativos com data e hora definidas. Quando forem ao ar, marque como Postado.'}
+                {activeSubMenu === 'posted' && 'Estes criativos já foram ao ar e estão organizados aqui para não misturar com os novos.'}
+                {activeSubMenu === 'rejected' && 'Criativos recusados pelo cliente. Ficam separados para não poluir sua esteira principal.'}
+              </p>
+            </div>
 
-            const hasCaption = Boolean(creative.description?.trim());
-            const isCaptionPending = hasCaption && (creative.captionStatus === 'pending_approval' || !creative.captionStatus || creative.captionStatus === 'draft');
-            const isCaptionApproved = hasCaption && creative.captionStatus === 'approved';
-            const isCaptionChanges = hasCaption && creative.captionStatus === 'changes_requested';
-
-            return (
-              <div
-                key={creative.id}
-                className={`bg-[#121218] rounded-2xl overflow-hidden border transition-all duration-200 flex flex-col group ${
-                  isPending
-                    ? 'border-[#F97316]/30 hover:border-[#F97316]/60'
-                    : isApproved
-                    ? 'border-blue-500/30 hover:border-blue-500/60'
-                    : isChanges
-                    ? 'border-amber-500/30 hover:border-amber-500/60'
-                    : 'border-[#24242D] hover:border-[#8B5CF6]/30'
-                }`}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleOpenCreateModal}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-white hover:bg-zinc-100 text-black shadow-sm flex items-center gap-1.5 cursor-pointer"
               >
-                {/* CARD MEDIA THUMBNAIL */}
-                <div 
-                  onClick={() => handleViewAsClient(creative.shareToken, 'all')}
-                  className="relative aspect-video bg-[#0B0B0F] flex items-center justify-center overflow-hidden cursor-pointer"
-                >
-                  {firstAsset ? (
-                    isVideo ? (
-                      <video src={firstAsset.url} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500" />
-                    ) : (
-                      <img
-                        src={firstAsset.url}
-                        alt={creative.title}
-                        className="w-full h-full object-cover opacity-95 group-hover:scale-105 transition-transform duration-500"
-                      />
-                    )
-                  ) : (
-                    <div className="text-[#686873]">
-                      <ImageIcon size={32} />
-                    </div>
-                  )}
+                <Plus size={15} strokeWidth={2.5} />
+                <span>Novo Criativo</span>
+              </button>
+            </div>
+          </div>
 
-                  {/* FORMAT BADGE */}
-                  <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/80 border border-[#24242D] text-[10px] font-mono font-semibold text-[#F2F2F5] flex items-center gap-1.5 shadow-sm">
-                    {isCarousel ? (
-                      <>
-                        <Layers size={11} className="text-[#A78BFA]" />
-                        <span>Carrossel ({creative.assets?.length || 0})</span>
-                      </>
-                    ) : isVideo ? (
-                      <>
-                        <Film size={11} className="text-[#F97316]" />
-                        <span>Vídeo</span>
-                      </>
-                    ) : (
-                      <>
-                        <ImageIcon size={11} className="text-blue-400" />
-                        <span>Imagem</span>
-                      </>
-                    )}
-                  </div>
+          {/* FILTER & SEARCH TOOLBAR */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-[#121218] border border-[#24242D] p-3.5 rounded-xl shadow-sm">
+            
+            {/* Search Input */}
+            <div className="relative flex-1 max-w-md">
+              <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#686873]" />
+              <input
+                type="text"
+                placeholder="Buscar por título, cliente ou legenda..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-[#17171F] border border-[#24242D] rounded-xl pl-9 pr-4 py-2 text-xs text-[#F2F2F5] placeholder-[#686873] focus:outline-none focus:border-[#8B5CF6]/50 transition-all"
+              />
+            </div>
 
-                  {/* STATUS BADGE (VISUAL) */}
-                  <div className="absolute top-3 right-3">
-                    {isPending && (
-                      <span className="px-2.5 py-1 rounded-full bg-[#F97316]/20 border border-[#F97316]/40 text-[#F97316] text-[10px] font-semibold flex items-center gap-1 shadow-sm">
-                        <Clock size={12} /> Visual Pendente
-                      </span>
-                    )}
-                    {isApproved && (
-                      <span className="px-2.5 py-1 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold flex items-center gap-1 shadow-sm">
-                        <CheckCircle2 size={12} /> Criativo Aprovado
-                      </span>
-                    )}
-                    {isChanges && (
-                      <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-semibold flex items-center gap-1 shadow-sm">
-                        <Clock size={12} /> Ajustes no Visual
-                      </span>
-                    )}
-                    {creative.status === 'rejected' && (
-                      <span className="px-2.5 py-1 rounded-full bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-semibold flex items-center gap-1 shadow-sm">
-                        <X size={12} /> Criativo Reprovado
-                      </span>
-                    )}
-                  </div>
-                </div>
+            {/* Filter dropdowns */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              
+              {/* Client Filter */}
+              <select
+                value={selectedClientId}
+                onChange={(e) => setSelectedClientId(e.target.value)}
+                className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
+              >
+                <option value="all">Todos os Clientes</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
 
-                {/* CARD BODY */}
-                <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-[11px] font-mono text-[#686873]">
-                      <span className="text-[#A78BFA] font-semibold uppercase">{creative.clientName || 'Cliente'}</span>
-                      <span>{new Date(creative.createdAt).toLocaleDateString('pt-BR')}</span>
-                    </div>
+              {/* Format Filter */}
+              <select
+                value={filterFormat}
+                onChange={(e) => setFilterFormat(e.target.value)}
+                className="bg-[#17171F] border border-[#24242D] rounded-xl px-3 py-2 text-xs text-[#F2F2F5] focus:outline-none focus:border-[#8B5CF6]/50 cursor-pointer"
+              >
+                <option value="all">Todos os Formatos</option>
+                <option value="carousel">🎠 Carrossel</option>
+                <option value="video">🎬 Vídeo</option>
+                <option value="single_image">🖼️ Imagem Única</option>
+              </select>
 
-                    <h3 
+            </div>
+          </div>
+
+          {/* CREATIVES GRID VIEW */}
+          {filteredCreatives.length === 0 ? (
+            <div className="bg-[#121218] border border-[#24242D] rounded-2xl p-12 text-center space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-[#17171F] border border-[#24242D] flex items-center justify-center text-[#686873] mx-auto">
+                {activeSubMenu === 'changes_requested' ? <MessageSquare size={32} className="text-amber-400" /> :
+                 activeSubMenu === 'approved' ? <CheckCircle2 size={32} className="text-blue-400" /> :
+                 activeSubMenu === 'scheduled' ? <Calendar size={32} className="text-purple-400" /> :
+                 activeSubMenu === 'posted' ? <Rocket size={32} className="text-emerald-400" /> :
+                 <XCircle size={32} className="text-red-400" />}
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-semibold text-[#F2F2F5] font-display">
+                  Nenhum item nesta aba
+                </h3>
+                <p className="text-xs text-[#92929F] max-w-sm mx-auto">
+                  {activeSubMenu === 'changes_requested' && 'Não há criativos com alterações pendentes no momento.'}
+                  {activeSubMenu === 'approved' && 'Não há criativos aprovados aguardando postagem.'}
+                  {activeSubMenu === 'scheduled' && 'Nenhum criativo agendado no momento.'}
+                  {activeSubMenu === 'posted' && 'Nenhum criativo marcado como postado ainda.'}
+                  {activeSubMenu === 'rejected' && 'Nenhum criativo rejeitado.'}
+                </p>
+              </div>
+              <button
+                onClick={() => setActiveSubMenu('dashboard')}
+                className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-2"
+              >
+                <span>Voltar ao Dashboard da Central</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {filteredCreatives.map((creative) => {
+                const firstAsset = creative.assets?.[0];
+                const isCarousel = creative.format === 'carousel' || (creative.assets || []).length > 1;
+                const isVideo = creative.format === 'video' || firstAsset?.type === 'video';
+                const hasCaption = Boolean(creative.description?.trim());
+
+                return (
+                  <div
+                    key={creative.id}
+                    className={`bg-[#121218] rounded-2xl overflow-hidden border transition-all duration-200 flex flex-col group ${
+                      activeSubMenu === 'changes_requested' ? 'border-amber-500/40 hover:border-amber-500/70' :
+                      activeSubMenu === 'approved' ? 'border-blue-500/40 hover:border-blue-500/70' :
+                      activeSubMenu === 'scheduled' ? 'border-purple-500/40 hover:border-purple-500/70' :
+                      activeSubMenu === 'posted' ? 'border-emerald-500/40 hover:border-emerald-500/70' :
+                      activeSubMenu === 'rejected' ? 'border-red-500/40 hover:border-red-500/70' :
+                      'border-[#24242D]'
+                    }`}
+                  >
+                    {/* CARD MEDIA THUMBNAIL */}
+                    <div 
                       onClick={() => handleViewAsClient(creative.shareToken, 'all')}
-                      className="font-semibold text-sm text-[#F2F2F5] line-clamp-1 group-hover:text-[#A78BFA] transition-colors cursor-pointer"
+                      className="relative aspect-video bg-[#0B0B0F] flex items-center justify-center overflow-hidden cursor-pointer"
                     >
-                      {creative.title}
-                    </h3>
-
-                    {/* CAPTION PILL / QUICK BUTTON */}
-                    <div className="pt-1">
-                      {hasCaption ? (
-                        <div className="p-2.5 bg-[#17171F] border border-[#24242D] rounded-xl space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span className={`text-[10px] font-mono font-bold flex items-center gap-1 ${
-                              isCaptionApproved
-                                ? 'text-emerald-400'
-                                : isCaptionChanges
-                                ? 'text-amber-400'
-                                : 'text-orange-400'
-                            }`}>
-                              <AlignLeft size={11} />
-                              <span>{isCaptionApproved ? 'Legenda Aprovada' : isCaptionChanges ? 'Ajuste na Legenda' : 'Legenda Pendente'}</span>
-                            </span>
-
-                            <button
-                              onClick={() => handleOpenCaptionEditor(creative)}
-                              className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
-                            >
-                              <Edit3 size={11} />
-                              <span>Editar Copy</span>
-                            </button>
-                          </div>
-                          <p className="text-xs text-[#92929F] line-clamp-2 leading-relaxed font-sans">
-                            {creative.description}
-                          </p>
-                        </div>
+                      {firstAsset ? (
+                        isVideo ? (
+                          <video src={firstAsset.url} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-500" />
+                        ) : (
+                          <img
+                            src={firstAsset.url}
+                            alt={creative.title}
+                            className="w-full h-full object-cover opacity-95 group-hover:scale-105 transition-transform duration-500"
+                          />
+                        )
                       ) : (
-                        <button
-                          onClick={() => handleOpenCaptionEditor(creative)}
-                          className="w-full p-2.5 bg-amber-500/10 hover:bg-amber-500/15 border border-dashed border-amber-500/30 rounded-xl text-[11px] text-amber-400 flex items-center justify-center gap-1.5 transition-all cursor-pointer font-medium"
-                        >
-                          <Plus size={13} />
-                          <span>Adicionar Legenda / Gerar Link de Legenda</span>
-                        </button>
+                        <div className="text-[#686873]">
+                          <ImageIcon size={32} />
+                        </div>
                       )}
-                    </div>
 
-                    {creative.clientFeedback && (
-                      <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
-                        💬 Visual: "{creative.clientFeedback}"
-                      </div>
-                    )}
-
-                    {creative.captionFeedback && (
-                      <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-xl text-[11px] text-amber-300 line-clamp-2 italic">
-                        ✍️ Legenda: "{creative.captionFeedback}"
-                      </div>
-                    )}
-                  </div>
-
-                  {/* CARD ACTIONS */}
-                  <div className="pt-3 border-t border-[#24242D] space-y-2">
-                    
-                    {/* Link Actions row */}
-                    <div className="grid grid-cols-2 gap-2">
-                      
-                      {/* Post Approval Link */}
-                      <button
-                        onClick={() => handleCopyLink(creative.shareToken)}
-                        className={`py-1.5 px-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
-                          copiedToken === creative.shareToken
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-[#17171F] hover:bg-[#20202B] text-[#F2F2F5] border border-[#24242D]'
-                        }`}
-                        title="Copiar link de aprovação completa do post"
-                      >
-                        {copiedToken === creative.shareToken ? <Check size={12} /> : <Copy size={12} />}
-                        <span className="truncate">{copiedToken === creative.shareToken ? 'Copiado!' : 'Link Completo'}</span>
-                      </button>
-
-                      {/* Caption Approval Link */}
-                      <button
-                        onClick={() => {
-                          if (!hasCaption) {
-                            handleOpenCaptionEditor(creative);
-                          } else {
-                            handleCopyCaptionLink(creative.shareToken);
-                          }
-                        }}
-                        className={`py-1.5 px-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
-                          copiedCaptionToken === creative.shareToken
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-[#1b1712] hover:bg-[#251f18] text-amber-400 border border-amber-500/30'
-                        }`}
-                        title="Copiar link focado na aprovação da legenda"
-                      >
-                        {copiedCaptionToken === creative.shareToken ? <Check size={12} /> : <AlignLeft size={12} />}
-                        <span className="truncate">{copiedCaptionToken === creative.shareToken ? 'Copiado!' : 'Link Legenda'}</span>
-                      </button>
-
-                    </div>
-
-                    {/* Secondary WhatsApp and Preview row */}
-                    <div className="flex items-center justify-between text-[#686873] pt-1">
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleShareWhatsApp(creative)}
-                          className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer text-xs flex items-center gap-1"
-                          title="WhatsApp do Post"
-                        >
-                          <Share2 size={13} />
-                          <span className="text-[11px]">Zap Post</span>
-                        </button>
-
-                        {hasCaption && (
-                          <button
-                            onClick={() => handleShareCaptionWhatsApp(creative)}
-                            className="p-1.5 rounded-lg hover:bg-amber-500/20 text-amber-400 transition-all cursor-pointer text-xs flex items-center gap-1"
-                            title="WhatsApp da Legenda"
-                          >
-                            <MessageSquare size={13} />
-                            <span className="text-[11px]">Zap Legenda</span>
-                          </button>
+                      {/* FORMAT BADGE */}
+                      <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-black/80 border border-[#24242D] text-[10px] font-mono font-semibold text-[#F2F2F5] flex items-center gap-1.5 shadow-sm">
+                        {isCarousel ? (
+                          <>
+                            <Layers size={11} className="text-[#A78BFA]" />
+                            <span>Carrossel ({creative.assets?.length || 0})</span>
+                          </>
+                        ) : isVideo ? (
+                          <>
+                            <Film size={11} className="text-[#F97316]" />
+                            <span>Vídeo</span>
+                          </>
+                        ) : (
+                          <>
+                            <ImageIcon size={11} className="text-blue-400" />
+                            <span>Imagem</span>
+                          </>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleOpenEditModal(creative)}
-                          className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
-                          title="Editar post completo"
-                        >
-                          <Edit3 size={13} />
-                          <span>Editar</span>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCreative(creative.id)}
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 hover:text-red-400 transition-all cursor-pointer text-xs"
-                          title="Excluir"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                      {/* STATUS BADGE */}
+                      <div className="absolute top-3 right-3">
+                        {activeSubMenu === 'changes_requested' && (
+                          <span className="px-2.5 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-mono font-bold flex items-center gap-1 shadow-sm">
+                            <MessageSquare size={11} /> Ajuste Solicitado
+                          </span>
+                        )}
+                        {activeSubMenu === 'approved' && (
+                          <span className="px-2.5 py-1 rounded-full bg-blue-500/90 text-white text-[10px] font-mono font-bold flex items-center gap-1 shadow-sm">
+                            <CheckCircle2 size={11} /> Aprovado
+                          </span>
+                        )}
+                        {activeSubMenu === 'scheduled' && (
+                          <span className="px-2.5 py-1 rounded-full bg-purple-500/90 text-white text-[10px] font-mono font-bold flex items-center gap-1 shadow-sm">
+                            <Calendar size={11} /> Agendado
+                          </span>
+                        )}
+                        {activeSubMenu === 'posted' && (
+                          <span className="px-2.5 py-1 rounded-full bg-emerald-500/90 text-white text-[10px] font-mono font-bold flex items-center gap-1 shadow-sm">
+                            <Rocket size={11} /> Postado
+                          </span>
+                        )}
+                        {activeSubMenu === 'rejected' && (
+                          <span className="px-2.5 py-1 rounded-full bg-red-500/90 text-white text-[10px] font-mono font-bold flex items-center gap-1 shadow-sm">
+                            <X size={11} /> Reprovado
+                          </span>
+                        )}
                       </div>
                     </div>
 
+                    {/* CARD BODY */}
+                    <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-[11px] font-mono text-[#686873]">
+                          <span className="text-[#A78BFA] font-semibold uppercase">{creative.clientName || 'Cliente'}</span>
+                          <span>{new Date(creative.createdAt).toLocaleDateString('pt-BR')}</span>
+                        </div>
+
+                        <h3 
+                          onClick={() => handleViewAsClient(creative.shareToken, 'all')}
+                          className="font-semibold text-sm text-[#F2F2F5] line-clamp-1 group-hover:text-[#A78BFA] transition-colors cursor-pointer"
+                        >
+                          {creative.title}
+                        </h3>
+
+                        {/* SCHEDULED DATE BADGE */}
+                        {creative.scheduledDate && (
+                          <div className="p-2 bg-purple-500/15 border border-purple-500/30 rounded-xl text-xs text-purple-300 flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-semibold">
+                              <Calendar size={13} className="text-purple-400" />
+                              <span>{new Date(creative.scheduledDate + 'T12:00:00').toLocaleDateString('pt-BR')} às {creative.scheduledTime || '18:00'}</span>
+                            </span>
+                            <button
+                              onClick={() => handleOpenScheduleModal(creative)}
+                              className="text-[10px] underline hover:text-white cursor-pointer"
+                            >
+                              Alterar
+                            </button>
+                          </div>
+                        )}
+
+                        {/* POSTED DATE BADGE */}
+                        {creative.postedDate && (
+                          <div className="p-2 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-semibold">
+                              <Rocket size={13} className="text-emerald-400" />
+                              <span>Postado em {new Date(creative.postedDate).toLocaleDateString('pt-BR')}</span>
+                            </span>
+                          </div>
+                        )}
+
+                        {/* CAPTION PILL / QUICK BUTTON */}
+                        <div className="pt-1">
+                          {hasCaption ? (
+                            <div className="p-2.5 bg-[#17171F] border border-[#24242D] rounded-xl space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className={`text-[10px] font-mono font-bold flex items-center gap-1 ${
+                                  creative.captionStatus === 'approved' ? 'text-emerald-400' :
+                                  creative.captionStatus === 'changes_requested' ? 'text-amber-400' :
+                                  'text-orange-400'
+                                }`}>
+                                  <AlignLeft size={11} />
+                                  <span>{creative.captionStatus === 'approved' ? 'Legenda Aprovada' : creative.captionStatus === 'changes_requested' ? 'Ajuste na Legenda' : 'Legenda Pendente'}</span>
+                                </span>
+
+                                <button
+                                  onClick={() => handleOpenCaptionEditor(creative)}
+                                  className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Edit3 size={11} />
+                                  <span>Editar</span>
+                                </button>
+                              </div>
+                              <p className="text-xs text-[#92929F] line-clamp-2 leading-relaxed font-sans">
+                                {creative.description}
+                              </p>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenCaptionEditor(creative)}
+                              className="w-full p-2.5 bg-amber-500/10 hover:bg-amber-500/15 border border-dashed border-amber-500/30 rounded-xl text-[11px] text-amber-400 flex items-center justify-center gap-1.5 transition-all cursor-pointer font-medium"
+                            >
+                              <Plus size={13} />
+                              <span>Adicionar Legenda</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* VISUAL FEEDBACK BOX */}
+                        {creative.clientFeedback && (
+                          <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs space-y-1.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[10px] font-mono font-bold text-amber-400 flex items-center gap-1">
+                                💬 Ajuste Visual:
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSaveFeedbackAsObservation(creative, creative.clientFeedback!, 'visual');
+                                }}
+                                className={`text-[10px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
+                                  isFeedbackSaved(creative.id, 'visual')
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                    : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                                }`}
+                                title="Salvar como observação do cliente para não errar novamente"
+                              >
+                                {isFeedbackSaved(creative.id, 'visual') ? <Check size={11} className="text-emerald-400" /> : <Bookmark size={11} />}
+                                <span>{isFeedbackSaved(creative.id, 'visual') ? 'Salvo nas Regras ✓' : 'Salvar como Observação'}</span>
+                              </button>
+                            </div>
+                            <p className="text-amber-200 text-xs italic font-sans line-clamp-3">
+                              "{creative.clientFeedback}"
+                            </p>
+                          </div>
+                        )}
+
+                        {/* CAPTION FEEDBACK BOX */}
+                        {creative.captionFeedback && (
+                          <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs space-y-1.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[10px] font-mono font-bold text-amber-400 flex items-center gap-1">
+                                ✍️ Ajuste de Legenda:
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSaveFeedbackAsObservation(creative, creative.captionFeedback!, 'caption');
+                                }}
+                                className={`text-[10px] font-mono px-2 py-0.5 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
+                                  isFeedbackSaved(creative.id, 'caption')
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                    : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                                }`}
+                                title="Salvar como observação do cliente para não errar novamente"
+                              >
+                                {isFeedbackSaved(creative.id, 'caption') ? <Check size={11} className="text-emerald-400" /> : <Bookmark size={11} />}
+                                <span>{isFeedbackSaved(creative.id, 'caption') ? 'Salvo nas Regras ✓' : 'Salvar como Observação'}</span>
+                              </button>
+                            </div>
+                            <p className="text-amber-200 text-xs italic font-sans line-clamp-3">
+                              "{creative.captionFeedback}"
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* WORKFLOW ACTION BUTTONS ACCORDING TO SUBMENU */}
+                      <div className="pt-3 border-t border-[#24242D] space-y-2">
+                        
+                        {/* 1. ACTIONS FOR APROVADOS TAB */}
+                        {activeSubMenu === 'approved' && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => handleOpenScheduleModal(creative)}
+                              className="py-2 px-3 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                            >
+                              <Calendar size={13} />
+                              <span>Agendar</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleMarkAsPosted(creative)}
+                              className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md"
+                            >
+                              <Rocket size={13} />
+                              <span>Marcar Postado</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 2. ACTIONS FOR AGENDADOS TAB */}
+                        {activeSubMenu === 'scheduled' && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => handleMoveToApproved(creative)}
+                              className="py-2 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold flex items-center justify-center gap-1 cursor-pointer transition-all"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Desagendar</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleMarkAsPosted(creative)}
+                              className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md"
+                            >
+                              <Rocket size={13} />
+                              <span>Marcar Postado</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 3. ACTIONS FOR AGUARDANDO MUDANÇA TAB */}
+                        {activeSubMenu === 'changes_requested' && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => handleOpenEditModal(creative)}
+                              className="py-2 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                            >
+                              <Edit3 size={13} />
+                              <span>Ajustar Arte</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleResubmitForApproval(creative)}
+                              className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md"
+                            >
+                              <Send size={13} />
+                              <span>Reenviar p/ Aprovar</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 4. ACTIONS FOR POSTADOS TAB */}
+                        {activeSubMenu === 'posted' && (
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              onClick={() => handleMoveToApproved(creative)}
+                              className="py-1.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white text-xs font-medium flex items-center gap-1 cursor-pointer transition-all"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Desmarcar Postado</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleViewAsClient(creative.shareToken, 'all')}
+                              className="py-1.5 px-3 rounded-xl bg-[#17171F] hover:bg-[#20202B] text-zinc-300 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                            >
+                              <Eye size={12} />
+                              <span>Visualizar</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 5. ACTIONS FOR REJEITADOS TAB */}
+                        {activeSubMenu === 'rejected' && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => handleRestoreCreative(creative)}
+                              className="py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md"
+                            >
+                              <RotateCcw size={13} />
+                              <span>Restaurar</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleDeleteCreative(creative.id)}
+                              className="py-2 px-3 rounded-xl bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                            >
+                              <Trash2 size={13} />
+                              <span>Excluir</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {/* LINK COPY & SHARE ROW */}
+                        <div className="flex items-center justify-between text-[#686873] pt-1">
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleCopyLink(creative.shareToken, creative.id)}
+                              className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
+                              title="Copiar link"
+                            >
+                              {copiedToken === (creative.shareToken || creative.id) ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                              <span className="text-[11px]">{copiedToken === (creative.shareToken || creative.id) ? 'Copiado' : 'Link'}</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleShareWhatsApp(creative)}
+                              className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer text-xs flex items-center gap-1"
+                              title="WhatsApp"
+                            >
+                              <Share2 size={12} />
+                              <span className="text-[11px]">WhatsApp</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleOpenEditModal(creative)}
+                              className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs"
+                              title="Editar"
+                            >
+                              <Edit3 size={13} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCreative(creative.id)}
+                              className="p-1.5 rounded-lg hover:bg-red-500/10 hover:text-red-400 transition-all cursor-pointer text-xs"
+                              title="Excluir"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
+
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
+
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* 3. SCHEDULE MODAL                                                         */}
+      {/* ========================================================================= */}
+      <CreativeScheduleModal
+        isOpen={isScheduleModalOpen}
+        onClose={() => {
+          setIsScheduleModalOpen(false);
+          setSchedulingCreative(null);
+        }}
+        creative={schedulingCreative}
+        onConfirmSchedule={handleConfirmSchedule}
+      />
 
       {/* ========================================================================= */}
       {/* 4. QUICK CAPTION & COPY MANAGER MODAL                                     */}
@@ -1201,146 +1630,180 @@ export default function CreativeHubView({
               </button>
             </div>
 
-            {/* AI GENERATOR TRIGGER */}
-            <div className="p-4 bg-gradient-to-r from-purple-950/40 via-[#171722] to-amber-950/40 border border-purple-500/25 rounded-2xl space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-purple-400 animate-pulse" />
-                  <span className="text-xs font-bold text-white">Criar / Aprimorar Legenda com Inteligência Artificial</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleGenerateAICaption}
-                  disabled={isGeneratingAICaption}
-                  className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-purple-600/20"
-                >
-                  <Wand2 size={13} />
-                  <span>{isGeneratingAICaption ? 'Gerando Legenda...' : '✨ Gerar Legenda com IA'}</span>
-                </button>
-              </div>
-
-              {/* TONE & GOAL SELECTORS */}
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-400 block mb-1">Tom de Voz:</label>
-                  <select
-                    value={aiTone}
-                    onChange={(e) => setAiTone(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-1.5 text-xs text-zinc-200 focus:outline-none"
+            {/* CLIENT FEEDBACK ON CAPTION (IF ANY) */}
+            {captionModalCreative.captionFeedback && (
+              <div className="p-3.5 bg-amber-500/15 border border-amber-500/30 rounded-2xl space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-mono font-bold text-amber-400 flex items-center gap-1.5">
+                    💬 Feedback do Cliente sobre a Legenda:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveFeedbackAsObservation(captionModalCreative, captionModalCreative.captionFeedback!, 'caption')}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition-all cursor-pointer flex items-center gap-1"
                   >
-                    <option value="persuasivo e envolvente">Persuasivo & Envolvente</option>
-                    <option value="educativo e didático">Educativo & Didático</option>
-                    <option value="autoridade e especialista">Autoridade & Especialista</option>
-                    <option value="descontraído e dinâmico">Descontraído & Dinâmico</option>
-                    <option value="direto e minimalista">Direto & Minimalista</option>
-                  </select>
+                    <Bookmark size={11} />
+                    <span>Salvar nas Regras</span>
+                  </button>
                 </div>
-                <div>
-                  <label className="text-[10px] font-mono text-zinc-400 block mb-1">Objetivo:</label>
-                  <select
-                    value={aiGoal}
-                    onChange={(e) => setAiGoal(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-1.5 text-xs text-zinc-200 focus:outline-none"
-                  >
-                    <option value="engajamento e comentários">Engajamento & Comentários</option>
-                    <option value="salvamentos e compartilhamentos">Salvamentos & Compartilhamento</option>
-                    <option value="vendas e clique na bio">Vendas & CTA na Bio / Direct</option>
-                    <option value="geração de leads">Geração de Leads</option>
-                  </select>
-                </div>
+                <p className="text-xs text-amber-200 italic">
+                  "{captionModalCreative.captionFeedback}"
+                </p>
               </div>
-            </div>
+            )}
 
-            {/* TEXTAREA FOR CAPTION */}
-            <div className="space-y-2">
+            {/* AI ASSISTANT PANEL */}
+            <div className="p-4 bg-purple-950/20 border border-purple-500/30 rounded-2xl space-y-3">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-zinc-200 block">
-                  Texto da Legenda / Copy Completo:
-                </label>
-                <span className="text-[11px] font-mono text-zinc-500">
-                  {captionText.length} caracteres
+                <div className="flex items-center gap-2 text-purple-300 text-xs font-bold">
+                  <Sparkles size={16} className="text-purple-400" />
+                  <span>Assistente de Copy & Legendas IA</span>
+                </div>
+                <span className="text-[10px] font-mono text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20">
+                  Respeita Regras do Cliente
                 </span>
               </div>
 
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-mono uppercase text-zinc-400 mb-1">Tom de Voz</label>
+                  <select
+                    value={aiTone}
+                    onChange={(e) => setAiTone(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
+                  >
+                    <option value="persuasivo e envolvente">Persuasivo e Envolvente</option>
+                    <option value="educativo e autoridade">Educativo / Especialista</option>
+                    <option value="descontraído e viral">Descontraído / Viral</option>
+                    <option value="direto e minimalista">Direto e Minimalista</option>
+                    <option value="emocional e inspirador">Emocional e Inspirador</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-mono uppercase text-zinc-400 mb-1">Objetivo da Copy</label>
+                  <select
+                    value={aiGoal}
+                    onChange={(e) => setAiGoal(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
+                  >
+                    <option value="engajamento e conversão">Engajamento & Comentários</option>
+                    <option value="salvamentos e compartilhamentos">Salvar & Compartilhar</option>
+                    <option value="chamada para ação no direct">Chamar no Direct / WhatsApp</option>
+                    <option value="venda e clique no link">Venda Direta / Link na Bio</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGenerateAICaption}
+                disabled={isGeneratingAICaption}
+                className="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
+              >
+                {isGeneratingAICaption ? (
+                  <>
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>Gerando copy inteligente...</span>
+                  </>
+                ) : (
+                  <>
+                    <Wand2 size={14} />
+                    <span>{captionText ? 'Melhorar / Reescrever Legenda com IA' : 'Gerar Legenda Completa com IA'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* TEXTAREA FOR CAPTION */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-mono uppercase font-bold text-zinc-400">
+                  Texto da Legenda / Copywriting
+                </label>
+                <span className="text-[10px] font-mono text-zinc-500">
+                  {captionText.length} caracteres
+                </span>
+              </div>
               <textarea
                 value={captionText}
                 onChange={(e) => setCaptionText(e.target.value)}
-                placeholder="Escreva ou cole a legenda do post com ganchos, quebras de linha e hashtags..."
-                className="w-full h-44 p-4 rounded-2xl bg-zinc-950 border border-zinc-800 focus:border-amber-500 focus:outline-none text-xs text-white placeholder-zinc-600 resize-none font-sans leading-relaxed"
+                placeholder="Escreva a legenda completa do post, incluindo quebras de linha, emojis e hashtags..."
+                rows={8}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl p-4 text-xs text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500 resize-none font-sans leading-relaxed"
               />
             </div>
 
-            {/* ACTIONS FOOTER */}
+            {/* MODAL FOOTER */}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-3 border-t border-zinc-800">
               <button
                 onClick={() => setIsCaptionModalOpen(false)}
-                className="px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-400 hover:text-white transition-all cursor-pointer text-center"
+                className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-xs font-semibold text-zinc-400 hover:text-white transition-all cursor-pointer text-center"
               >
                 Cancelar
               </button>
 
               <div className="flex items-center gap-2">
                 <button
-                  type="button"
-                  onClick={() => handleSaveCaption(false)}
+                  onClick={() => handleSaveQuickCaption(false)}
                   disabled={isSavingCaption}
-                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-200 transition-all cursor-pointer text-center"
+                  className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-200 transition-all cursor-pointer text-center"
                 >
-                  {isSavingCaption ? 'Salvando...' : 'Salvar Legenda'}
+                  Salvar Rascunho
                 </button>
 
                 <button
-                  type="button"
-                  onClick={() => handleSaveCaption(true)}
+                  onClick={() => handleSaveQuickCaption(true)}
                   disabled={isSavingCaption || !captionText.trim()}
-                  className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-500 hover:from-amber-500 hover:to-orange-400 text-xs font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="flex-1 sm:flex-none px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-xs font-bold text-white shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
-                  <Copy size={14} />
-                  <span>{isSavingCaption ? 'Salvando...' : 'Salvar e Copiar Link de Aprovação'}</span>
+                  <Send size={14} />
+                  <span>Salvar & Gerar Link de Legenda</span>
                 </button>
               </div>
             </div>
+
           </motion.div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 5. MODAL FOR CREATING / EDITING FULL CREATIVE (CAROUSEL & VIDEO)          */}
+      {/* 5. CREATE / EDIT FULL CREATIVE MODAL                                      */}
       {/* ========================================================================= */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-[#14141f] border border-zinc-800 max-w-4xl w-full rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 my-8 max-h-[90vh] overflow-y-auto scrollbar-thin"
+            className="bg-[#121218] border border-zinc-800 max-w-4xl w-full rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto"
           >
-            
             {/* MODAL HEADER */}
-            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-gradient-to-tr from-purple-600 to-orange-500 text-white shadow-lg">
-                  <Sparkles size={20} />
+                <div className="p-3 rounded-2xl bg-purple-600/15 border border-purple-500/30 text-purple-400">
+                  {editingCreative ? <Edit3 size={20} /> : <Plus size={20} strokeWidth={2.5} />}
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white font-display">
+                  <h3 className="font-bold text-lg text-white font-display">
                     {editingCreative ? 'Editar Criativo' : 'Novo Criativo para Aprovação'}
-                  </h2>
-                  <p className="text-xs text-zinc-400">
-                    Configure as imagens do carrossel ou vídeo e gere o link para seu cliente aprovar.
-                  </p>
+                  </h3>
+                  <span className="text-xs text-zinc-400">
+                    Carrosséis de até 20 imagens, vídeos de até 15GB ou posts estáticos.
+                  </span>
                 </div>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-zinc-500 hover:text-white p-1.5 rounded-xl hover:bg-zinc-800 transition-all cursor-pointer"
+                className="text-zinc-500 hover:text-white p-1 rounded-xl transition-colors cursor-pointer"
               >
                 <X size={20} />
               </button>
             </div>
 
+            {/* ERROR ALERT */}
             {uploadError && (
-              <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs text-amber-300 flex items-center gap-2">
-                <AlertCircle size={16} className="text-amber-400 shrink-0" />
+              <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
+                <AlertCircle size={16} className="text-red-400 shrink-0" />
                 <span>{uploadError}</span>
               </div>
             )}
@@ -1703,7 +2166,9 @@ export default function CreativeHubView({
         </div>
       )}
 
-      {/* 7. DESIGNER CAROUSEL AI GENERATOR MODAL */}
+      {/* ========================================================================= */}
+      {/* 7. DESIGNER CAROUSEL AI GENERATOR MODAL                                  */}
+      {/* ========================================================================= */}
       <DesignerCarouselAIModal
         isOpen={isAIModalOpen}
         onClose={() => setIsAIModalOpen(false)}
@@ -1712,6 +2177,37 @@ export default function CreativeHubView({
         currentUser={currentUser}
         onApplyToCreative={handleApplyAIToCreative}
       />
+
+      {/* ========================================================================= */}
+      {/* 8. CLIENT OBSERVATIONS & BRAND GUIDELINES MODAL                           */}
+      {/* ========================================================================= */}
+      <ClientObservationsModal
+        isOpen={isObservationsModalOpen}
+        onClose={() => setIsObservationsModalOpen(false)}
+        clients={clients}
+        activeClientId={selectedClientId !== 'all' ? selectedClientId : undefined}
+        currentUser={currentUser}
+        observations={observations}
+        onSaveObservation={handleSaveObservation}
+        onDeleteObservation={handleDeleteObservation}
+      />
+
+      {/* TOAST NOTIFICATION */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-6 right-6 z-70 bg-[#171722] border border-amber-500/50 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 backdrop-blur-md"
+          >
+            <div className="p-1 rounded-lg bg-amber-500/20 text-amber-400">
+              <CheckCircle2 size={15} />
+            </div>
+            <span>{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

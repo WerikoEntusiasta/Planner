@@ -78,13 +78,51 @@ export default function ClientCreativeApprovalPage({
     setIsLoading(true);
     setError(null);
 
-    const resolvedClient = clientToken || new URLSearchParams(window.location.search).get('client') || new URLSearchParams(window.location.search).get('clientToken') || '';
-    const resolvedShareToken = shareToken || new URLSearchParams(window.location.search).get('creativeToken') || new URLSearchParams(window.location.search).get('shareToken') || '';
+    const urlParams = new URLSearchParams(window.location.search);
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const lastPart = pathParts[pathParts.length - 1];
+    const isPathToken = lastPart && !['aprovar', 'aprovar-legenda', 'aprovar-legendas', 'aprovar-criativo', 'aprovar-criativos', 'central-aprovacao'].includes(lastPart);
+
+    const resolvedClient = clientToken || urlParams.get('client') || urlParams.get('clientToken') || urlParams.get('clientId') || urlParams.get('clientName') || '';
+    const resolvedShareToken = shareToken || urlParams.get('creativeToken') || urlParams.get('shareToken') || urlParams.get('token') || urlParams.get('id') || urlParams.get('creativeId') || (isPathToken ? lastPart : '');
 
     try {
-      // If we have a client identifier or hub mode, try the public-hub endpoint
-      if (resolvedClient || viewMode === 'hub' || (!resolvedShareToken && resolvedClient)) {
-        const res = await fetch(`/api/creatives/public-hub/${encodeURIComponent(resolvedClient || 'all')}`);
+      // 1. If we have a single creative shareToken or ID, fetch it first
+      if (resolvedShareToken) {
+        try {
+          const res = await fetch(`/api/creatives/public/${encodeURIComponent(resolvedShareToken)}`);
+          const data = await res.json();
+          if (res.ok && data.success && data.creative) {
+            setActiveCreative(data.creative);
+            setClientName(data.creative.clientName || 'Sua Marca');
+            setCreatorName(data.creative.creatorName || 'Agência / Criador');
+
+            // Try to load sibling creatives for the general gallery hub
+            const targetHubClient = data.creative.clientId || resolvedClient || 'all';
+            try {
+              const hubRes = await fetch(`/api/creatives/public-hub/${encodeURIComponent(targetHubClient)}`);
+              const hubData = await hubRes.json();
+              if (hubRes.ok && hubData.success && Array.isArray(hubData.creatives) && hubData.creatives.length > 0) {
+                setCreatives(hubData.creatives);
+              } else {
+                setCreatives([data.creative]);
+              }
+            } catch {
+              setCreatives([data.creative]);
+            }
+
+            setIsLoading(false);
+            return;
+          }
+        } catch (singleErr) {
+          console.warn('Single public fetch failed, trying hub fallback:', singleErr);
+        }
+      }
+
+      // 2. If we have a client identifier or hub mode, try the public-hub endpoint
+      if (resolvedClient || viewMode === 'hub' || !resolvedShareToken) {
+        const hubId = resolvedClient || (resolvedShareToken || 'all');
+        const res = await fetch(`/api/creatives/public-hub/${encodeURIComponent(hubId)}`);
         const data = await res.json();
         if (res.ok && data.success && Array.isArray(data.creatives) && data.creatives.length > 0) {
           setCreatives(data.creatives);
@@ -92,7 +130,12 @@ export default function ClientCreativeApprovalPage({
           setCreatorName(data.creatorName || 'Agência / Criador');
 
           if (resolvedShareToken) {
-            const found = data.creatives.find((c: Creative) => c.shareToken === resolvedShareToken || c.id === resolvedShareToken);
+            const found = data.creatives.find((c: Creative) => 
+              c.shareToken === resolvedShareToken || 
+              c.id === resolvedShareToken || 
+              c.shareToken?.toLowerCase() === resolvedShareToken.toLowerCase() ||
+              c.id?.toLowerCase() === resolvedShareToken.toLowerCase()
+            );
             if (found) {
               setActiveCreative(found);
               setViewMode('single');
@@ -107,43 +150,30 @@ export default function ClientCreativeApprovalPage({
         }
       }
 
-      // If we have a single shareToken, try the single public endpoint
-      if (resolvedShareToken) {
-        const res = await fetch(`/api/creatives/public/${encodeURIComponent(resolvedShareToken)}`);
-        const data = await res.json();
-        if (res.ok && data.success && data.creative) {
-          setActiveCreative(data.creative);
-          setClientName(data.creative.clientName || 'Sua Marca');
-          setCreatorName(data.creative.creatorName || 'Agência / Criador');
-          
-          // Also try to load sibling creatives for the general hub if clientId is present
-          if (data.creative.clientId) {
-            try {
-              const hubRes = await fetch(`/api/creatives/public-hub/${encodeURIComponent(data.creative.clientId)}`);
-              const hubData = await hubRes.json();
-              if (hubRes.ok && hubData.success && Array.isArray(hubData.creatives)) {
-                setCreatives(hubData.creatives);
-              } else {
-                setCreatives([data.creative]);
-              }
-            } catch {
-              setCreatives([data.creative]);
-            }
-          } else {
-            setCreatives([data.creative]);
+      // 3. Fallback: try public-hub with 'all' if specific client was empty
+      if (resolvedClient && resolvedClient !== 'all') {
+        try {
+          const fallbackRes = await fetch('/api/creatives/public-hub/all');
+          const fallbackData = await fallbackRes.json();
+          if (fallbackRes.ok && fallbackData.success && Array.isArray(fallbackData.creatives) && fallbackData.creatives.length > 0) {
+            setCreatives(fallbackData.creatives);
+            setClientName(fallbackData.clientName || 'Sua Marca');
+            setCreatorName(fallbackData.creatorName || 'Agência / Criador');
+            setActiveCreative(fallbackData.creatives[0]);
+            setIsLoading(false);
+            return;
           }
-
-          setIsLoading(false);
-          return;
+        } catch (fbErr) {
+          console.warn('Fallback hub fetch error:', fbErr);
         }
       }
 
-      // Local storage fallback for offline / dev preview
+      // 4. Local storage fallback for offline / dev preview
       const localCreatives: Creative[] = JSON.parse(localStorage.getItem('creator_planner_creatives') || '[]');
       if (localCreatives.length > 0) {
         let matching = localCreatives;
         if (resolvedClient && resolvedClient !== 'all') {
-          matching = localCreatives.filter(c => c.clientId === resolvedClient);
+          matching = localCreatives.filter(c => c.clientId === resolvedClient || c.clientName?.toLowerCase() === resolvedClient.toLowerCase());
         }
         if (matching.length === 0) matching = localCreatives;
 
@@ -168,7 +198,7 @@ export default function ClientCreativeApprovalPage({
         setActiveCreative(localCreatives[0]);
         setClientName(localCreatives[0].clientName || 'Sua Marca');
       } else {
-        setError('Não foi possível carregar a central de aprovação. Verifique sua conexão.');
+        setError('Não foi possível carregar a central de aprovação. Verifique sua conexão com a internet.');
       }
     } finally {
       setIsLoading(false);
@@ -536,17 +566,28 @@ export default function ClientCreativeApprovalPage({
           </p>
           <div className="pt-2 flex flex-col gap-2">
             <button
-              onClick={() => window.location.reload()}
-              className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all cursor-pointer"
+              onClick={() => {
+                setError(null);
+                loadData();
+              }}
+              className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all cursor-pointer shadow-lg shadow-purple-600/20"
             >
               Tentar Novamente
+            </button>
+            <button
+              onClick={() => {
+                window.location.href = '/aprovar?client=all&mode=hub';
+              }}
+              className="w-full py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 hover:text-white transition-all cursor-pointer"
+            >
+              Ver Central Geral de Criativos
             </button>
             {onBackToApp && (
               <button
                 onClick={onBackToApp}
-                className="w-full py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-400 hover:text-white transition-all cursor-pointer"
+                className="w-full py-2 rounded-xl bg-zinc-900/60 border border-zinc-800/80 text-xs text-zinc-500 hover:text-zinc-300 transition-all cursor-pointer"
               >
-                Voltar ao App
+                Voltar ao Painel do Criador
               </button>
             )}
           </div>
@@ -891,59 +932,97 @@ export default function ClientCreativeApprovalPage({
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-zinc-800/80">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-6 pt-6 border-t border-zinc-800/80">
+                {/* 1. VISUAL PENDENTE */}
                 <button
+                  type="button"
                   onClick={() => setHubStatusFilter('pending_approval')}
                   className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
                     hubStatusFilter === 'pending_approval'
-                      ? 'bg-orange-500/15 border-orange-500 shadow-lg shadow-orange-500/10'
+                      ? 'bg-orange-500/15 border-orange-500 shadow-lg shadow-orange-500/10 ring-1 ring-orange-500/40'
                       : 'bg-zinc-900/60 border-zinc-800/80 hover:border-orange-500/40'
                   }`}
                 >
                   <span className="text-[10px] font-mono uppercase font-bold text-orange-400 block mb-0.5 flex items-center gap-1">
-                    <Clock size={11} /> Aguardando Aprovação
+                    <Clock size={11} /> Visual Pendente
                   </span>
                   <div className="text-2xl font-bold font-display text-orange-400">{pendingCount}</div>
                 </button>
 
+                {/* 2. VISUAL APROVADO */}
                 <button
+                  type="button"
                   onClick={() => setHubStatusFilter('approved')}
                   className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
                     hubStatusFilter === 'approved'
-                      ? 'bg-blue-500/15 border-blue-500 shadow-lg shadow-blue-500/10'
+                      ? 'bg-blue-500/15 border-blue-500 shadow-lg shadow-blue-500/10 ring-1 ring-blue-500/40'
                       : 'bg-zinc-900/60 border-zinc-800/80 hover:border-blue-500/40'
                   }`}
                 >
                   <span className="text-[10px] font-mono uppercase font-bold text-blue-400 block mb-0.5 flex items-center gap-1">
-                    <CheckCircle2 size={11} /> Aprovados
+                    <CheckCircle2 size={11} /> Criativo Aprovado
                   </span>
                   <div className="text-2xl font-bold font-display text-blue-400">{approvedCount}</div>
                 </button>
 
+                {/* 3. LEGENDAS PENDENTES */}
                 <button
+                  type="button"
+                  onClick={() => {
+                    setApprovalFocus('caption');
+                    setHubCaptionFilter('pending_approval');
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer bg-zinc-900/60 border-amber-500/30 hover:border-amber-500/60 hover:bg-amber-500/10`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
+                    <Clock size={11} className={pendingCaptionsCount > 0 ? "animate-pulse" : ""} /> Legenda Pendente
+                  </span>
+                  <div className="text-2xl font-bold font-display text-amber-400">{pendingCaptionsCount}</div>
+                </button>
+
+                {/* 4. LEGENDAS APROVADAS */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApprovalFocus('caption');
+                    setHubCaptionFilter('approved');
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer bg-zinc-900/60 border-emerald-500/20 hover:border-emerald-500/50 hover:bg-emerald-500/10`}
+                >
+                  <span className="text-[10px] font-mono uppercase font-bold text-emerald-400 block mb-0.5 flex items-center gap-1">
+                    <CheckCircle2 size={11} /> Legenda Aprovada
+                  </span>
+                  <div className="text-2xl font-bold font-display text-emerald-400">{approvedCaptionsCount}</div>
+                </button>
+
+                {/* 5. AJUSTE DE CRIATIVO */}
+                <button
+                  type="button"
                   onClick={() => setHubStatusFilter('changes_requested')}
                   className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
                     hubStatusFilter === 'changes_requested'
-                      ? 'bg-amber-500/15 border-amber-500 shadow-lg shadow-amber-500/10'
+                      ? 'bg-amber-500/15 border-amber-500 shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/40'
                       : 'bg-zinc-900/60 border-zinc-800/80 hover:border-amber-500/40'
                   }`}
                 >
                   <span className="text-[10px] font-mono uppercase font-bold text-amber-400 block mb-0.5 flex items-center gap-1">
-                    <MessageSquare size={11} /> Ajustes Solicitados
+                    <MessageSquare size={11} /> Ajuste Criativo
                   </span>
                   <div className="text-2xl font-bold font-display text-amber-400">{changesCount}</div>
                 </button>
 
+                {/* 6. TOTAL CRIATIVOS */}
                 <button
+                  type="button"
                   onClick={() => setHubStatusFilter('all')}
                   className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
                     hubStatusFilter === 'all'
-                      ? 'bg-purple-500/15 border-purple-500 shadow-lg shadow-purple-500/10'
+                      ? 'bg-purple-500/15 border-purple-500 shadow-lg shadow-purple-500/10 ring-1 ring-purple-500/40'
                       : 'bg-zinc-900/60 border-zinc-800/80 hover:border-purple-500/40'
                   }`}
                 >
                   <span className="text-[10px] font-mono uppercase font-bold text-zinc-400 block mb-0.5 flex items-center gap-1">
-                    <Layers size={11} /> Total de Criativos
+                    <Layers size={11} /> Total Criativos
                   </span>
                   <div className="text-2xl font-bold font-display text-white">{totalCount}</div>
                 </button>

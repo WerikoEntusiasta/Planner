@@ -1038,6 +1038,12 @@ function initDatabase() {
       format TEXT NOT NULL,
       platform TEXT NOT NULL,
       status TEXT DEFAULT 'draft',
+      captionStatus TEXT,
+      captionFeedback TEXT,
+      captionApprovalDate TEXT,
+      scheduledDate TEXT,
+      scheduledTime TEXT,
+      postedDate TEXT,
       assets TEXT NOT NULL,
       aspectRatio TEXT DEFAULT '1:1',
       shareToken TEXT UNIQUE NOT NULL,
@@ -1049,6 +1055,32 @@ function initDatabase() {
   `).run();
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_creatives_share_token ON creatives(shareToken)').run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_creatives_user_client ON creatives(userId, clientId)').run();
+
+  // Safe migrations for creatives table
+  try { db.prepare('ALTER TABLE creatives ADD COLUMN captionStatus TEXT').run(); } catch(e) {}
+  try { db.prepare('ALTER TABLE creatives ADD COLUMN captionFeedback TEXT').run(); } catch(e) {}
+  try { db.prepare('ALTER TABLE creatives ADD COLUMN captionApprovalDate TEXT').run(); } catch(e) {}
+  try { db.prepare('ALTER TABLE creatives ADD COLUMN scheduledDate TEXT').run(); } catch(e) {}
+  try { db.prepare('ALTER TABLE creatives ADD COLUMN scheduledTime TEXT').run(); } catch(e) {}
+  try { db.prepare('ALTER TABLE creatives ADD COLUMN postedDate TEXT').run(); } catch(e) {}
+
+  // Client Observations & Rules Table (Saved Feedback / Directives)
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS client_observations (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      clientId TEXT NOT NULL,
+      clientName TEXT,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      category TEXT DEFAULT 'general',
+      creativeId TEXT,
+      creativeTitle TEXT,
+      createdAt TEXT,
+      updatedAt TEXT
+    )
+  `).run();
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_client_observations_user_client ON client_observations(userId, clientId)').run();
 
   // Password recovery resets table
   db.prepare(`
@@ -2127,7 +2159,10 @@ app.post('/api/creatives', async (req, res) => {
       aspectRatio,
       shareToken,
       clientFeedback,
-      approvalDate
+      approvalDate,
+      scheduledDate,
+      scheduledTime,
+      postedDate
     } = req.body;
 
     if (!title) {
@@ -2156,6 +2191,9 @@ app.post('/api/creatives', async (req, res) => {
           captionStatus = ?,
           captionFeedback = ?,
           captionApprovalDate = ?,
+          scheduledDate = ?,
+          scheduledTime = ?,
+          postedDate = ?,
           assets = ?,
           aspectRatio = ?,
           clientFeedback = ?,
@@ -2173,6 +2211,9 @@ app.post('/api/creatives', async (req, res) => {
         captionStatus || null,
         captionFeedback || null,
         captionApprovalDate || null,
+        scheduledDate || null,
+        scheduledTime || null,
+        postedDate || null,
         assetsJson,
         aspectRatio || '1:1',
         clientFeedback || null,
@@ -2186,9 +2227,9 @@ app.post('/api/creatives', async (req, res) => {
       db.prepare(`
         INSERT INTO creatives (
           id, userId, clientId, clientName, title, description, format, platform,
-          status, captionStatus, captionFeedback, captionApprovalDate, assets, aspectRatio, shareToken, clientFeedback, approvalDate,
+          status, captionStatus, captionFeedback, captionApprovalDate, scheduledDate, scheduledTime, postedDate, assets, aspectRatio, shareToken, clientFeedback, approvalDate,
           createdAt, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         creativeId,
         workspaceOwnerId,
@@ -2202,6 +2243,9 @@ app.post('/api/creatives', async (req, res) => {
         captionStatus || (description ? 'pending_approval' : null),
         captionFeedback || null,
         captionApprovalDate || null,
+        scheduledDate || null,
+        scheduledTime || null,
+        postedDate || null,
         assetsJson,
         aspectRatio || '1:1',
         creativeShareToken,
@@ -2245,15 +2289,30 @@ app.delete('/api/creatives/:id', async (req, res) => {
   }
 });
 
-// 4. Public endpoint for Client to view Creative by shareToken (No Auth Required)
+// 4. Public endpoint for Client to view Creative by shareToken or ID (No Auth Required)
 app.get('/api/creatives/public/:shareToken', (req, res) => {
   try {
-    const { shareToken } = req.params;
-    if (!shareToken) {
+    const rawToken = req.params.shareToken;
+    if (!rawToken) {
       return res.status(400).json({ success: false, error: 'Token de aprovação não fornecido' });
     }
+    const shareToken = decodeURIComponent(rawToken).trim();
 
-    const row = db.prepare('SELECT * FROM creatives WHERE shareToken = ? OR id = ?').get(shareToken, shareToken) as any;
+    let row = db.prepare(`
+      SELECT * FROM creatives 
+      WHERE shareToken = ? OR id = ? OR LOWER(shareToken) = LOWER(?) OR LOWER(id) = LOWER(?)
+    `).get(shareToken, shareToken, shareToken, shareToken) as any;
+
+    // Fallback: Check if shareToken was actually passed as a clientId or clientName
+    if (!row) {
+      row = db.prepare(`
+        SELECT * FROM creatives 
+        WHERE clientId = ? OR LOWER(clientName) = LOWER(?)
+        ORDER BY createdAt DESC 
+        LIMIT 1
+      `).get(shareToken, shareToken) as any;
+    }
+
     if (!row) {
       return res.status(404).json({ success: false, error: 'Criativo não encontrado ou link expirado' });
     }
@@ -2277,35 +2336,83 @@ app.get('/api/creatives/public/:shareToken', (req, res) => {
 // 4.1 Public endpoint for Client to view ALL Creatives for a client/workspace (General Approval Link)
 app.get('/api/creatives/public-hub/:clientId', (req, res) => {
   try {
-    const { clientId } = req.params;
-    if (!clientId) {
+    const rawClientId = req.params.clientId;
+    if (!rawClientId) {
       return res.status(400).json({ success: false, error: 'Identificador do cliente não fornecido' });
     }
+    const clientId = decodeURIComponent(rawClientId).trim();
 
     let clientRow: any = null;
     let creatorRow: any = null;
     let creativesRows: any[] = [];
 
-    if (clientId !== 'all') {
-      clientRow = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId) as any;
-      creativesRows = db.prepare('SELECT * FROM creatives WHERE clientId = ? ORDER BY createdAt DESC').all(clientId) as any[];
-      
+    if (clientId !== 'all' && clientId !== 'undefined' && clientId !== 'null') {
+      // 1. Try finding client by ID or Name
+      clientRow = db.prepare(`
+        SELECT * FROM clients 
+        WHERE id = ? OR LOWER(name) = LOWER(?) OR LOWER(id) = LOWER(?)
+      `).get(clientId, clientId, clientId) as any;
+
       if (clientRow) {
         creatorRow = db.prepare('SELECT name, email FROM users WHERE id = ?').get(clientRow.userId) as any;
+        // Search creatives by clientId or clientName
+        creativesRows = db.prepare(`
+          SELECT * FROM creatives 
+          WHERE clientId = ? OR LOWER(clientName) = LOWER(?) OR clientId = ?
+          ORDER BY createdAt DESC
+        `).all(clientRow.id, clientRow.name, clientId) as any[];
+
+        // If still 0, check if this creator has creatives
+        if (creativesRows.length === 0 && clientRow.userId) {
+          creativesRows = db.prepare(`
+            SELECT * FROM creatives 
+            WHERE userId = ?
+            ORDER BY createdAt DESC
+          `).all(clientRow.userId) as any[];
+        }
+      } else {
+        // 2. ClientRow not found, query creatives directly by clientId or clientName
+        creativesRows = db.prepare(`
+          SELECT * FROM creatives 
+          WHERE clientId = ? OR LOWER(clientName) = LOWER(?) OR LOWER(clientId) = LOWER(?)
+          ORDER BY createdAt DESC
+        `).all(clientId, clientId, clientId) as any[];
+      }
+
+      // 3. If still empty, check if clientId matches a creative ID or shareToken
+      if (creativesRows.length === 0) {
+        const creativeMatch = db.prepare(`
+          SELECT * FROM creatives 
+          WHERE id = ? OR shareToken = ? OR LOWER(id) = LOWER(?) OR LOWER(shareToken) = LOWER(?)
+        `).get(clientId, clientId, clientId, clientId) as any;
+
+        if (creativeMatch) {
+          if (creativeMatch.clientId) {
+            clientRow = db.prepare('SELECT * FROM clients WHERE id = ?').get(creativeMatch.clientId) as any;
+            creativesRows = db.prepare('SELECT * FROM creatives WHERE clientId = ? ORDER BY createdAt DESC').all(creativeMatch.clientId) as any[];
+          }
+          if (creativesRows.length === 0 && creativeMatch.userId) {
+            creativesRows = db.prepare('SELECT * FROM creatives WHERE userId = ? ORDER BY createdAt DESC').all(creativeMatch.userId) as any[];
+          }
+          if (creativesRows.length === 0) {
+            creativesRows = [creativeMatch];
+          }
+        }
+      }
+
+      // 4. If still empty, check if clientId matches a user/workspace ID or email
+      if (creativesRows.length === 0) {
+        const userMatch = db.prepare('SELECT id, name, email FROM users WHERE id = ? OR LOWER(email) = LOWER(?)').get(clientId, clientId) as any;
+        if (userMatch) {
+          creatorRow = userMatch;
+          creativesRows = db.prepare('SELECT * FROM creatives WHERE userId = ? ORDER BY createdAt DESC').all(userMatch.id) as any[];
+        }
       }
     }
 
-    // If clientRow not found directly by ID, check if clientId matches a creative or workspace userId
-    if (!clientRow && creativesRows.length === 0) {
-      // Check if it's a userId
-      const userMatch = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(clientId) as any;
-      if (userMatch) {
-        creatorRow = userMatch;
-        creativesRows = db.prepare('SELECT * FROM creatives WHERE userId = ? ORDER BY createdAt DESC').all(clientId) as any[];
-      } else {
-        // Fallback: search by clientName or return all non-empty
-        creativesRows = db.prepare('SELECT * FROM creatives ORDER BY createdAt DESC LIMIT 100').all() as any[];
-      }
+    // 5. Global Fallback: if 'all' or nothing matched, return available creatives
+    if (creativesRows.length === 0) {
+      creativesRows = db.prepare('SELECT * FROM creatives ORDER BY createdAt DESC LIMIT 100').all() as any[];
     }
 
     const parsedCreatives = creativesRows.map(row => {
@@ -2319,7 +2426,7 @@ app.get('/api/creatives/public-hub/:clientId', (req, res) => {
       };
     });
 
-    const clientName = clientRow?.name || parsedCreatives[0]?.clientName || 'Cliente';
+    const clientName = clientRow?.name || parsedCreatives[0]?.clientName || (clientId !== 'all' && clientId !== 'undefined' ? clientId : 'Sua Marca');
 
     res.json({
       success: true,
@@ -2462,6 +2569,140 @@ app.post('/api/creatives/public/:shareToken/feedback', (req, res) => {
 });
 
 // ==========================================
+// 📌 CLIENT OBSERVATIONS & BRAND GUIDELINES API
+// ==========================================
+
+// 1. Get Client Observations
+app.get('/api/client-observations', async (req, res) => {
+  try {
+    const auth = await authenticateRequester(req);
+    if (!auth.authenticated || !auth.user) {
+      return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
+    }
+
+    const workspaceOwnerId = auth.user.invitedByUserId || auth.user.id;
+    const { clientId } = req.query;
+
+    let rows: any[] = [];
+    if (clientId && clientId !== 'all') {
+      rows = db.prepare(`
+        SELECT * FROM client_observations 
+        WHERE (userId = ? OR userId = ?) AND clientId = ?
+        ORDER BY createdAt DESC
+      `).all(auth.user.id, workspaceOwnerId, String(clientId));
+    } else {
+      rows = db.prepare(`
+        SELECT * FROM client_observations 
+        WHERE userId = ? OR userId = ?
+        ORDER BY createdAt DESC
+      `).all(auth.user.id, workspaceOwnerId);
+    }
+
+    res.json({ success: true, observations: rows });
+  } catch (err: any) {
+    console.error('Error in GET /api/client-observations:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Create or Update Client Observation
+app.post('/api/client-observations', async (req, res) => {
+  try {
+    const auth = await authenticateRequester(req);
+    if (!auth.authenticated || !auth.user) {
+      return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
+    }
+
+    const { id, clientId, clientName, title, content, category, creativeId, creativeTitle } = req.body;
+
+    if (!clientId || !content || !String(content).trim()) {
+      return res.status(400).json({ success: false, error: 'Identificador do cliente e conteúdo da observação são obrigatórios.' });
+    }
+
+    const observationId = id || `obs_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const now = new Date().toISOString();
+    const effectiveTitle = (title && String(title).trim()) ? String(title).trim() : `Observação do Cliente (${new Date().toLocaleDateString('pt-BR')})`;
+    const effectiveCategory = category || 'general';
+
+    // Get client name if not provided
+    let resolvedClientName = clientName;
+    if (!resolvedClientName) {
+      const clientRow = db.prepare('SELECT name FROM clients WHERE id = ?').get(clientId) as any;
+      resolvedClientName = clientRow?.name || 'Cliente';
+    }
+
+    const existing = db.prepare('SELECT id FROM client_observations WHERE id = ?').get(observationId);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE client_observations SET
+          title = ?,
+          content = ?,
+          category = ?,
+          creativeId = ?,
+          creativeTitle = ?,
+          updatedAt = ?
+        WHERE id = ?
+      `).run(
+        effectiveTitle,
+        String(content).trim(),
+        effectiveCategory,
+        creativeId || null,
+        creativeTitle || null,
+        now,
+        observationId
+      );
+    } else {
+      db.prepare(`
+        INSERT INTO client_observations (
+          id, userId, clientId, clientName, title, content, category, creativeId, creativeTitle, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        observationId,
+        auth.user.id,
+        clientId,
+        resolvedClientName,
+        effectiveTitle,
+        String(content).trim(),
+        effectiveCategory,
+        creativeId || null,
+        creativeTitle || null,
+        now,
+        now
+      );
+    }
+
+    const saved = db.prepare('SELECT * FROM client_observations WHERE id = ?').get(observationId);
+    res.json({ success: true, observation: saved, message: 'Observação salva com sucesso!' });
+  } catch (err: any) {
+    console.error('Error in POST /api/client-observations:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Delete Client Observation
+app.delete('/api/client-observations/:id', async (req, res) => {
+  try {
+    const auth = await authenticateRequester(req);
+    if (!auth.authenticated || !auth.user) {
+      return res.status(401).json({ success: false, error: auth.error || 'Não autenticado' });
+    }
+
+    const workspaceOwnerId = auth.user.invitedByUserId || auth.user.id;
+    const { id } = req.params;
+
+    db.prepare('DELETE FROM client_observations WHERE id = ? AND (userId = ? OR userId = ?)').run(
+      id, auth.user.id, workspaceOwnerId
+    );
+
+    res.json({ success: true, message: 'Observação excluída com sucesso!' });
+  } catch (err: any) {
+    console.error('Error in DELETE /api/client-observations/:id:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
 // 🤖 AI CAROUSEL SCRIPT & COPY GENERATOR (GEMINI 3.7 FLASH)
 // ==========================================
 app.post('/api/ai/carousel-generator', async (req, res) => {
@@ -2589,10 +2830,14 @@ Retorne ESTRITAMENTE um objeto JSON válido no seguinte formato:
 // 🤖 AI CAPTION & COPYWRITING GENERATOR (GEMINI 3.7 FLASH)
 app.post('/api/ai/caption-generator', async (req, res) => {
   try {
-    const { title, clientName, platform = 'instagram', format = 'carousel', tone = 'persuasivo e envolvente', goal = 'engajamento e conversão', existingCaption = '' } = req.body;
+    const { title, clientName, platform = 'instagram', format = 'carousel', tone = 'persuasivo e envolvente', goal = 'engajamento e conversão', existingCaption = '', clientRules = [] } = req.body;
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ success: false, error: 'O título ou tema do criativo é obrigatório.' });
     }
+
+    const rulesFormatted = Array.isArray(clientRules) && clientRules.length > 0
+      ? `\n\nDIRETRIZES E REGRAS MANDATÓRIAS DO CLIENTE (ATENÇÃO: Siga rigorosamente para não errar):\n${clientRules.map((r, i) => `- ${r}`).join('\n')}`
+      : (typeof clientRules === 'string' && clientRules.trim() ? `\n\nDIRETRIZES DO CLIENTE: ${clientRules}` : '');
 
     const systemPrompt = `Você é um Copywriter Sênior especializado em mídias sociais (Instagram, Facebook, LinkedIn, TikTok).
 Crie uma legenda/copy completa e de alto engajamento para a seguinte publicação:
@@ -2602,7 +2847,7 @@ Plataforma: "${platform}"
 Formato do Criativo: "${format}"
 Tom de Voz: "${tone}"
 Objetivo: "${goal}"
-${existingCaption ? `Legenda Atual (para aprimorar ou reescrever): "${existingCaption}"` : ''}
+${existingCaption ? `Legenda Atual (para aprimorar ou reescrever): "${existingCaption}"` : ''}${rulesFormatted}
 
 Estrutura da Legenda:
 1. Gancho inicial irresistível na primeira linha (para fazer a pessoa clicar em "mais...").
