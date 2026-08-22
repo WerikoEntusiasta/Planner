@@ -11,12 +11,12 @@ import {
   Calendar, Grid, Layers, Plus, Sparkles, ChevronDown, ChevronRight, UserPlus, LogOut, 
   Users, Edit3, LifeBuoy, Shield, BarChart2, Palette, Hash, Rocket, 
   Bookmark, Workflow, Menu, X, CheckCircle2, Target, TrendingUp,
-  Image as ImageIcon, Wrench, Lock
+  Image as ImageIcon, Wrench, Lock, Clock
 } from 'lucide-react';
 
 interface AppNavigationSidebarProps {
-  activeView: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai' | 'editor' | 'creatives';
-  setActiveView: (v: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai' | 'editor' | 'creatives') => void;
+  activeView: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai' | 'editor' | 'creatives' | 'scheduling';
+  setActiveView: (v: 'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'carousel-ai' | 'editor' | 'creatives' | 'scheduling') => void;
   onNewPostClick: () => void;
   
   // Client props
@@ -126,6 +126,7 @@ export default function AppNavigationSidebar({
     { id: 'kanban', label: t('viewBoard', 'Board Kanban'), icon: Layers, color: 'text-accent-orange', allowed: true },
     { id: 'pipeline', label: 'Pipeline de Produção', icon: Workflow, color: 'text-blue-400', allowed: hasPerm('productionPipeline') },
     { id: 'creatives', label: 'Central de Criativos', icon: ImageIcon, color: 'text-pink-400', allowed: hasPerm('creativeHub') },
+    { id: 'scheduling', label: 'Agendamento & Integrações', icon: Clock, color: 'text-purple-400', allowed: true },
     { id: 'dashboard', label: t('viewDashboard', 'Dashboard de Métricas'), icon: BarChart2, color: 'text-emerald-400', allowed: hasPerm('viewMetrics') },
   ];
 

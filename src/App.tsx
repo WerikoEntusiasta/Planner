@@ -22,6 +22,7 @@ import PaymentCancelledPage from './components/PaymentCancelledPage';
 import ClientApprovalPage from './components/ClientApprovalPage';
 import ClientCreativeApprovalPage from './components/ClientCreativeApprovalPage';
 import CreativeHubView from './components/CreativeHubView';
+import SchedulingHubView from './components/SchedulingHubView';
 import SupportModal from './components/SupportModal';
 import LGPDModal from './components/LGPDModal';
 import DemoNoticeModal from './components/DemoNoticeModal';
@@ -54,7 +55,7 @@ export default function App() {
   const [activeClientId, setActiveClientId] = useState<string>('');
 
   // View & Modals States
-  const [activeView, setActiveView] = useState<'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'editor' | 'carousel-ai' | 'creatives'>('grid');
+  const [activeView, setActiveView] = useState<'grid' | 'calendar' | 'kanban' | 'dashboard' | 'pipeline' | 'editor' | 'carousel-ai' | 'creatives' | 'scheduling'>('grid');
   const [isCampaignsModalOpen, setIsCampaignsModalOpen] = useState(false);
   const [isReferenceHubModalOpen, setIsReferenceHubModalOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -1750,6 +1751,20 @@ export default function App() {
                   onOpenPricing={() => setIsPricingModalOpen(true)}
                 />
               )
+            )}
+
+            {activeView === 'scheduling' && (
+              <SchedulingHubView
+                posts={clientPosts}
+                currentUser={currentUser}
+                activeClient={userClients.find(c => c.id === activeClientId)}
+                onUpdatePost={(updatedPost) => {
+                  setPosts(posts.map(p => p.id === updatedPost.id ? updatedPost : p));
+                }}
+                onAddPost={(newPost) => {
+                  setPosts([newPost, ...posts]);
+                }}
+              />
             )}
           </div>
 
