@@ -20,6 +20,7 @@ interface PostEditorViewProps {
   clientName: string;
   readOnly?: boolean;
   onOpenPricing?: () => void;
+  onOpenIntegrationsModal?: () => void;
 }
 
 export default function PostEditorView({
@@ -31,7 +32,8 @@ export default function PostEditorView({
   clientId,
   clientName,
   readOnly,
-  onOpenPricing
+  onOpenPricing,
+  onOpenIntegrationsModal
 }: PostEditorViewProps) {
   const { t } = useLanguage();
   const [title, setTitle] = useState('');
@@ -48,6 +50,34 @@ export default function PostEditorView({
   const [ctaText, setCtaText] = useState('');
   const [visualIdea, setVisualIdea] = useState('');
   const [coverThumbnail, setCoverThumbnail] = useState('');
+  const [connectedAccountId, setConnectedAccountId] = useState('');
+  const [connectedAccounts, setConnectedAccounts] = useState<any[]>([]);
+
+  // Fetch connected client accounts for OAuth scheduling
+  useEffect(() => {
+    const fetchConnectedAccounts = async () => {
+      try {
+        const userToken = localStorage.getItem('planner_user_token') || '';
+        const currentUserStr = localStorage.getItem('planner_current_user');
+        const currentUser = currentUserStr ? JSON.parse(currentUserStr) : null;
+        const userId = currentUser ? currentUser.id : 'user_1';
+
+        const res = await fetch('/api/connected-accounts', {
+          headers: {
+            'x-user-id': userId,
+            ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {})
+          }
+        });
+        const data = await res.json();
+        if (data.success) {
+          setConnectedAccounts(data.data || []);
+        }
+      } catch (err) {
+        console.error('Error fetching connected accounts:', err);
+      }
+    };
+    fetchConnectedAccounts();
+  }, []);
 
   // Auto-adjust default format based on chosen platform
   useEffect(() => {
@@ -76,6 +106,7 @@ export default function PostEditorView({
       setCtaText(translated.ctaText || '');
       setVisualIdea(translated.visualIdea || '');
       setCoverThumbnail(translated.coverThumbnail || '');
+      setConnectedAccountId(translated.connectedAccountId || '');
     } else {
       setTitle('');
       setPlatform('instagram');
@@ -91,6 +122,7 @@ export default function PostEditorView({
       setCtaText('');
       setVisualIdea('');
       setCoverThumbnail('');
+      setConnectedAccountId('');
     }
   }, [postToEdit, initialDate]);
 
@@ -191,6 +223,7 @@ export default function PostEditorView({
       approvalStatus: postToEdit ? postToEdit.approvalStatus : undefined,
       approvalFeedback: postToEdit ? postToEdit.approvalFeedback : undefined,
       approvalDate: postToEdit ? postToEdit.approvalDate : undefined,
+      connectedAccountId: connectedAccountId || undefined,
     };
 
     onSave(postData);
@@ -632,6 +665,40 @@ export default function PostEditorView({
                   <option value="published">✅ Publicado / Concluído</option>
                 </select>
               </div>
+            </div>
+
+            {/* Connected Client Account for OAuth Auto-Publishing */}
+            <div className="pt-4 border-t border-panel-border/60">
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider">
+                  Conta do Cliente Conectada (Publicação Automática via OAuth)
+                </label>
+                {onOpenIntegrationsModal && (
+                  <button
+                    type="button"
+                    onClick={onOpenIntegrationsModal}
+                    className="text-xs text-accent-purple hover:text-purple-400 font-medium flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <LinkIcon size={13} />
+                    <span>Conectar nova conta (Meta OAuth)</span>
+                  </button>
+                )}
+              </div>
+              <select
+                value={connectedAccountId}
+                onChange={(e) => setConnectedAccountId(e.target.value)}
+                className="w-full bg-panel-black text-zinc-200 border border-panel-border p-3 rounded-xl text-xs focus:outline-none focus:border-accent-purple font-medium cursor-pointer"
+              >
+                <option value="">Nenhuma conta vinculada (Apenas agendamento interno)</option>
+                {connectedAccounts.map((acc: any) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.provider.toUpperCase()}: {acc.name} (@{acc.username}) {acc.status === 'active' ? '🟢 Ativa' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-zinc-500 mt-1.5 font-mono">
+                Ao vincular uma conta do cliente via OAuth, o sistema enviará o post para publicação automática na data e horário programados.
+              </p>
             </div>
           </div>
 

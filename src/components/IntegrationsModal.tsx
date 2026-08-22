@@ -104,8 +104,17 @@ export default function IntegrationsModal({ isOpen, onClose, userId, userEmail }
       // Open the Meta login window directly in a popup (safe within iframe)
       const popupWidth = 600;
       const popupHeight = 750;
-      const left = window.top ? (window.top.outerWidth / 2) + (window.top.screenX || 0) - (popupWidth / 2) : 100;
-      const top = window.top ? (window.top.outerHeight / 2) + (window.top.screenY || 0) - (popupHeight / 2) : 100;
+      let left = 100;
+      let top = 100;
+      try {
+        if (window.top) {
+          left = (window.top.outerWidth / 2) + (window.top.screenX || 0) - (popupWidth / 2);
+          top = (window.top.outerHeight / 2) + (window.top.screenY || 0) - (popupHeight / 2);
+        }
+      } catch (e) {
+        left = (window.innerWidth / 2) - (popupWidth / 2);
+        top = (window.innerHeight / 2) - (popupHeight / 2);
+      }
 
       const authWindow = window.open(
         data.url,

@@ -149,8 +149,7 @@ export default function AppNavigationSidebar({
       icon: Workflow, 
       color: 'text-accent-orange', 
       action: onOpenIntegrationsModal,
-      allowed: hasPerm('manageIntegrations'),
-      isComingSoon: true 
+      allowed: hasPerm('manageIntegrations')
     },
     { id: 'team', label: currentUser?.isTeamMember ? t('viewTeam', 'Equipa & Permissões') : t('teamAndPlans', 'Equipa & Planos'), icon: Users, color: 'text-accent-orange', action: onOpenTeamModal, allowed: true },
     { id: 'support', label: t('support', 'Suporte Técnico'), icon: LifeBuoy, color: 'text-accent-orange', action: onOpenSupportModal, allowed: true },

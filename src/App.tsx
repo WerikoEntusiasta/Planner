@@ -1316,7 +1316,7 @@ export default function App() {
             alert('Acesso restrito: Você não tem permissão para configurar integrações.');
             return;
           }
-          setComingSoonFeature('integrations');
+          setIsIntegrationsModalOpen(true);
         }}
         onOpenBrandKitModal={() => {
           if (!checkPermission('manageBrandKit')) {
@@ -1370,6 +1370,7 @@ export default function App() {
             clientName={userClients.find(c => c.id === activeClientId)?.name || 'Cliente'}
             readOnly={trialStatus.isReadOnly}
             onOpenPricing={() => setIsPricingModalOpen(true)}
+            onOpenIntegrationsModal={() => setIsIntegrationsModalOpen(true)}
           />
         ) : (
           <>
@@ -1481,13 +1482,7 @@ export default function App() {
             onOpenApprovalLink={() => setIsShareApprovalModalOpen(true)}
           />
 
-          {/* Quick Status KPI Chips & 1-Click Operational Filters */}
-          <QuickStatusCounters
-            posts={clientPosts}
-            selectedStatusFilter={statusFilter}
-            onSelectStatusFilter={(newStatus) => setStatusFilter(newStatus)}
-            onSwitchView={(v: any) => setActiveView(v)}
-          />
+
 
           {/* Discrete Free Plan Contact Warning Banner */}
           {!currentUser.isTeamMember && (!currentUser.plan || currentUser.plan === 'free') && (

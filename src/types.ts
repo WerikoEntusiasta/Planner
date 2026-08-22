@@ -85,6 +85,7 @@ export interface Post {
   approvalStatus?: 'draft' | 'pending' | 'approved' | 'rejected';
   approvalFeedback?: string;
   approvalDate?: string;
+  connectedAccountId?: string; // Connected client social account ID via OAuth
 }
 
 export interface SupportTicket {
