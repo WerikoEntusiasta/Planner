@@ -6,7 +6,7 @@ let globalSocket: Socket | null = null;
 export const getSocket = (): Socket => {
   if (!globalSocket) {
     globalSocket = io({
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
