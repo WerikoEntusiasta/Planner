@@ -885,6 +885,42 @@ function initDatabase() {
   ensureColumn('goals', 'userId', 'TEXT');
 
   db.prepare(`
+    CREATE TABLE IF NOT EXISTS cancellation_attempts (
+      id TEXT PRIMARY KEY,
+      userId TEXT,
+      email TEXT NOT NULL,
+      encryptedIp TEXT NOT NULL,
+      attemptCount INTEGER DEFAULT 1,
+      createdAt TEXT NOT NULL
+    )
+  `).run();
+
+  try {
+    const existingCoupon = db.prepare('SELECT id FROM coupons WHERE code = ?').get('RETENCAO50');
+    if (!existingCoupon) {
+      db.prepare(`
+        INSERT INTO coupons (id, code, discountType, discountValue, applicablePlans, applicableCycles, maxUses, usedCount, expiresAt, isActive, createdAt, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'cp_retencao50',
+        'RETENCAO50',
+        'percent',
+        50,
+        'starter,basic,pro,growth',
+        'quarterly',
+        1,
+        0,
+        new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        1,
+        new Date().toISOString(),
+        'Cupom especial de retenção: 50% de desconto no plano de 3 meses.'
+      );
+    }
+  } catch (e) {
+    console.warn('Could not seed RETENCAO50 coupon:', e);
+  }
+
+  db.prepare(`
     CREATE TABLE IF NOT EXISTS connected_accounts (
       id TEXT PRIMARY KEY,
       userId TEXT NOT NULL,
@@ -1553,6 +1589,47 @@ app.get('/api/auth/invite-info/:hostId', async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint to send team invitation email with link and temporary credentials
+app.post('/api/team/invite-email', async (req: any, res) => {
+  const auth = await authenticateRequester(req);
+  if (!auth.authenticated || !auth.user) {
+    return res.status(401).json({ success: false, error: 'Autenticação requerida.' });
+  }
+
+  const { inviteEmail, inviteLink, memberName } = req.body;
+  if (!inviteEmail || !inviteLink) {
+    return res.status(400).json({ success: false, error: 'E-mail do convite e link são obrigatórios.' });
+  }
+
+  try {
+    const hostUser = auth.user;
+    await sendEmail({
+      to: inviteEmail.trim(),
+      subject: `Convite para ingressar na equipe de ${hostUser.name || 'Workspace'}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 24px; background: #18181b; color: #f4f4f5; border-radius: 16px;">
+          <h2 style="color: #a855f7;">Você foi convidado para uma equipe!</h2>
+          <p>Olá${memberName ? ` <strong>${memberName}</strong>` : ''},</p>
+          <p><strong>${hostUser.name}</strong> convidou você para fazer parte do workspace de gestão de conteúdo e planejamento.</p>
+          
+          <div style="margin: 20px 0; padding: 20px; background: #27272a; border-radius: 12px; border: 1px solid #7c3aed;">
+            <p style="margin-top: 0;">Para aceitar o convite e configurar sua conta com as credenciais concedidas:</p>
+            <a href="${inviteLink}" style="display: inline-block; margin-top: 10px; padding: 12px 24px; background: #7c3aed; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: bold;">Aceitar Convite & Acessar Workspace</a>
+          </div>
+
+          <p style="font-size: 12px; color: #a1a1aa; margin-top: 30px;">Equipe Planner de Conteúdo & Marketing</p>
+        </div>
+      `
+    });
+
+    recordAuditLog('TEAM_INVITE_EMAIL', `Convite de equipe enviado por e-mail para ${inviteEmail}.`, 'team');
+    res.json({ success: true, message: 'E-mail de convite enviado com sucesso.' });
+  } catch (err: any) {
+    console.error('Error sending team invite email:', err);
+    res.status(500).json({ success: false, error: err.message || 'Falha ao enviar e-mail de convite.' });
   }
 });
 
@@ -2740,8 +2817,9 @@ app.post('/api/posts/schedule-now', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Post ID is required' });
   }
 
+  let post: any = null;
   try {
-    const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId) as any;
+    post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId) as any;
     if (!post) {
       return res.status(404).json({ success: false, error: 'Postagem não encontrada.' });
     }
@@ -2766,6 +2844,33 @@ app.post('/api/posts/schedule-now', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error in schedule-now:', err);
+
+    // Send scheduling error alert email if user email is available
+    if (requester?.email) {
+      try {
+        await sendEmail({
+          to: requester.email,
+          subject: `⚠️ Falha no Agendamento / Publicação: "${post?.title || 'Postagem'}"`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; background: #18181b; color: #f4f4f5; border-radius: 16px;">
+              <h2 style="color: #ef4444;">Alerta de Erro em Agendamento</h2>
+              <p>Olá <strong>${requester.name || 'Criador'}</strong>,</p>
+              <p>Ocorreu uma falha ao tentar disparar e publicar a postagem <strong>"${post?.title || postId}"</strong> na plataforma <strong>${post?.platform || 'Meta/Social'}</strong>.</p>
+              
+              <div style="margin: 16px 0; padding: 16px; background: #27272a; border-radius: 12px; border-left: 4px solid #ef4444;">
+                <p style="margin: 0; font-family: monospace; color: #fca5a5;">${err.message || 'Erro de conexão com a API da Meta / Servidor'}</p>
+              </div>
+
+              <p>Verifique as credenciais da conta conectada ou tente publicar novamente pelo painel.</p>
+              <p style="font-size: 12px; color: #a1a1aa; margin-top: 30px;">Equipe Planner de Conteúdo & Marketing</p>
+            </div>
+          `
+        });
+      } catch (mailErr) {
+        console.warn('Failed to send scheduling error notification email:', mailErr);
+      }
+    }
+
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -3620,7 +3725,7 @@ app.get('/api/admin/tickets', requireAdminAuth, (req, res) => {
   }
 });
 
-app.post('/api/admin/tickets/:id/reply', requireAdminAuth, (req, res) => {
+app.post('/api/admin/tickets/:id/reply', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { message, adminName = 'Suporte Planner' } = req.body;
@@ -3649,6 +3754,29 @@ app.post('/api/admin/tickets/:id/reply', requireAdminAuth, (req, res) => {
       SET replies = ?, status = 'em_andamento', updatedAt = ?
       WHERE id = ?
     `).run(JSON.stringify(currentReplies), new Date().toISOString(), id);
+
+    if (ticket.userEmail) {
+      try {
+        await sendEmail({
+          to: ticket.userEmail,
+          subject: `Atualização no Chamado #${id}: ${ticket.subject}`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; background: #18181b; color: #f4f4f5; border-radius: 16px;">
+              <h2 style="color: #a855f7;">Nova Resposta no Suporte</h2>
+              <p>Olá <strong>${ticket.userName || 'Cliente'}</strong>,</p>
+              <p>O suporte respondeu ao seu chamado <strong>#${id} (${ticket.subject})</strong>:</p>
+              <div style="margin: 16px 0; padding: 16px; background: #27272a; border-radius: 12px; border-left: 4px solid #a855f7;">
+                <p style="margin: 0; white-space: pre-wrap;">${message.trim()}</p>
+              </div>
+              <p>Acesse o painel para continuar o atendimento.</p>
+              <p style="font-size: 12px; color: #a1a1aa; margin-top: 30px;">Equipe Planner de Conteúdo & Marketing</p>
+            </div>
+          `
+        });
+      } catch (mailErr) {
+        console.warn('Failed to send support reply email:', mailErr);
+      }
+    }
 
     recordAuditLog('TICKET_REPLY', `Resposta enviada para o ticket #${id} (${ticket.subject}).`, 'support');
 
@@ -4106,6 +4234,128 @@ app.get('/api/stripe/session-status', async (req, res) => {
   } catch (err: any) {
     console.error('[Stripe] Erro ao recuperar sessão:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6.3.5 Subscription Cancellation & Retention Endpoint (with LGPD encrypted IP & anti-abuse attempt count)
+app.post('/api/subscription/cancel', async (req: any, res) => {
+  try {
+    const { userId, customerEmail } = req.body;
+    const email = customerEmail || (userId ? (db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as any)?.email : null);
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'E-mail do cliente ou ID de usuário é obrigatório.' });
+    }
+
+    // LGPD Compliance: Get and encrypt client IP address
+    const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip || '127.0.0.1';
+    const clientIp = Array.isArray(rawIp) ? rawIp[0] : String(rawIp).split(',')[0].trim();
+    const encryptedIp = encryptSecret(clientIp);
+
+    // Record cancellation attempt
+    const attemptId = `cancel_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const nowIso = new Date().toISOString();
+
+    // Check prior attempts count for this email
+    const priorAttempts = db.prepare('SELECT COUNT(*) as count FROM cancellation_attempts WHERE LOWER(email) = LOWER(?)').get(email) as any;
+    const attemptCount = (priorAttempts?.count || 0) + 1;
+
+    db.prepare(`
+      INSERT INTO cancellation_attempts (id, userId, email, encryptedIp, attemptCount, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(attemptId, userId || null, email, encryptedIp, attemptCount, nowIso);
+
+    // Cancel in Stripe if configured
+    let subscriptionExpiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('pt-BR');
+    try {
+      const stripe = await getStripeClient();
+      if (stripe) {
+        const customers = await stripe.customers.list({ email, limit: 1 });
+        if (customers.data.length > 0) {
+          const subs = await stripe.subscriptions.list({ customer: customers.data[0].id, status: 'active', limit: 1 });
+          if (subs.data.length > 0) {
+            const subId = subs.data[0].id;
+            const currentPeriodEnd = (subs.data[0] as any).current_period_end;
+            if (currentPeriodEnd) {
+              subscriptionExpiryDate = new Date(currentPeriodEnd * 1000).toLocaleDateString('pt-BR');
+            }
+            await stripe.subscriptions.update(subId, { cancel_at_period_end: true });
+          }
+        }
+      }
+    } catch (stripeErr) {
+      console.warn('[Stripe] Aviso ao cancelar assinatura na API:', stripeErr);
+    }
+
+    // Revert user plan to free or mark expiration
+    try {
+      if (userId) {
+        db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE id = ?').run('free', userId);
+      } else {
+        db.prepare('UPDATE users SET plan = ?, isPaid = 0 WHERE LOWER(email) = LOWER(?)').run('free', email);
+      }
+    } catch (dbErr) {
+      console.error('Erro ao atualizar plano do usuário após cancelamento:', dbErr);
+    }
+
+    // Send Cancellation Email based on attempt count (Anti-abuse rule)
+    const isFirstAttempt = attemptCount === 1;
+    const subject = isFirstAttempt 
+      ? 'Confirmação de Cancelamento & Oferta Especial de 50% de Desconto' 
+      : 'Confirmação de Cancelamento de Assinatura';
+
+    const forwardedProto = (req.headers['x-forwarded-proto'] as string) || '';
+    const forwardedHost = (req.headers['x-forwarded-host'] as string) || '';
+    const host = forwardedHost.split(',')[0].trim() || req.get('host') || 'planner.amplificagroup.com';
+    const proto = (!host.includes('localhost') && !host.includes('127.0.0.1')) ? 'https' : (forwardedProto.split(',')[0].trim() || req.protocol || 'http');
+    const discountLink = `${proto}://${host}/?coupon=RETENCAO50&plan=growth&cycle=quarterly`;
+
+    const htmlContent = isFirstAttempt ? `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; background: #18181b; color: #f4f4f5; border-radius: 16px;">
+        <h2 style="color: #a855f7;">Confirmação de Cancelamento</h2>
+        <p>Olá,</p>
+        <p>Recebemos sua solicitação de cancelamento de assinatura. Lamentamos ver você partir!</p>
+        <p>Sua assinatura atual permanecerá ativa e com acesso total até o vencimento em: <strong>${subscriptionExpiryDate}</strong>.</p>
+        
+        <div style="margin: 24px 0; padding: 20px; background: #27272a; border-radius: 12px; border: 1px solid #7c3aed;">
+          <h3 style="color: #c084fc; margin-top: 0;">Queremos você de volta com 50% de desconto!</h3>
+          <p>Para te ajudar a continuar crescendo, preparamos um presente exclusivo: <strong>50% de desconto</strong> para renovar ou assinar o nosso <strong>Plano de 3 Meses (Trimestral)</strong>.</p>
+          <p>Utilize o cupom <code style="background: #3f3f46; padding: 4px 8px; border-radius: 4px; color: #e879f9; font-weight: bold;">RETENCAO50</code> ou clique no botão abaixo:</p>
+          <a href="${discountLink}" style="display: inline-block; margin-top: 10px; padding: 12px 24px; background: #7c3aed; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: bold;">Resgatar 50% de Desconto (Plano 3 Meses)</a>
+        </div>
+
+        <p style="font-size: 12px; color: #a1a1aa; margin-top: 30px;">Atenciosamente,<br>Equipe Planner de Conteúdo & Marketing</p>
+      </div>
+    ` : `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; background: #18181b; color: #f4f4f5; border-radius: 16px;">
+        <h2 style="color: #a855f7;">Confirmação de Cancelamento</h2>
+        <p>Olá,</p>
+        <p>Sua solicitação de cancelamento de assinatura foi processada com sucesso.</p>
+        <p>Você continuará tendo acesso aos recursos premium até a data de vencimento atual: <strong>${subscriptionExpiryDate}</strong>.</p>
+        <p>Agradecemos por ter utilizado nossa plataforma e esperamos vê-lo novamente no futuro.</p>
+        <p style="font-size: 12px; color: #a1a1aa; margin-top: 30px;">Atenciosamente,<br>Equipe Planner de Conteúdo & Marketing</p>
+      </div>
+    `;
+
+    await sendEmail({
+      to: email,
+      subject,
+      html: htmlContent
+    });
+
+    recordAuditLog('SUBSCRIPTION_CANCEL_REQUEST', `Cancelamento solicitado para ${email} (Tentativa #${attemptCount}). IP criptografado registrado (LGPD).`, 'billing');
+
+    res.json({
+      success: true,
+      message: 'Cancelamento processado com sucesso.',
+      attemptCount,
+      expiresAt: subscriptionExpiryDate,
+      offeredRetentionDiscount: isFirstAttempt
+    });
+
+  } catch (err: any) {
+    console.error('Error in /api/subscription/cancel:', err);
+    res.status(500).json({ success: false, error: err.message || 'Erro ao processar cancelamento.' });
   }
 });
 
