@@ -33,6 +33,7 @@ import ProductionPipelineView from './components/ProductionPipelineView';
 import CampaignsModal from './components/CampaignsModal';
 import ReferenceHubModal from './components/ReferenceHubModal';
 import AndroidAppModal from './components/AndroidAppModal';
+import MobileBottomNav from './components/MobileBottomNav';
 import CarouselAICreatorModal from './components/CarouselAICreatorModal';
 import ComingSoonModal, { ComingSoonFeatureType } from './components/ComingSoonModal';
 import QuickOnboardingGuide from './components/QuickOnboardingGuide';
@@ -1343,6 +1344,7 @@ export default function App() {
           setIsCampaignsModalOpen(true);
         }}
         onOpenReferenceHubModal={() => setIsReferenceHubModalOpen(true)}
+        onOpenAndroidAppModal={() => setIsAndroidAppModalOpen(true)}
         onOpenCarouselAIModal={() => {
           if (!checkPermission('useAI')) {
             alert('Acesso restrito: Você não tem permissão para utilizar ferramentas de Inteligência Artificial.');
@@ -1479,7 +1481,7 @@ export default function App() {
         <div className="flex-1 flex flex-col lg:flex-row min-w-0 overflow-y-auto">
           
           {/* Main Workspace Panels */}
-          <main className="flex-1 p-6 md:p-8 space-y-6">
+          <main className="flex-1 p-3.5 sm:p-6 md:p-8 space-y-5 md:space-y-6 pb-28 lg:pb-8">
           
           {/* Quick Onboarding Success Guide for Customer Experience */}
           <QuickOnboardingGuide
@@ -1911,6 +1913,11 @@ export default function App() {
           clientName={userClients.find(c => c.id === activeClientId)?.name || 'Cliente'}
         />
 
+        <AndroidAppModal
+          isOpen={isAndroidAppModalOpen}
+          onClose={() => setIsAndroidAppModalOpen(false)}
+        />
+
         {/* 15 Days Free Trial Expired Warning & Data Export Modal */}
         <TrialExpiredModal
           isOpen={showTrialExpiredModal}
@@ -1970,9 +1977,17 @@ export default function App() {
         )}
 
         {/* 5. FOOTER */}
-        <footer className="border-t border-panel-border/80 bg-panel-black py-4 text-center text-[11px] text-zinc-600 font-mono flex-shrink-0">
+        <footer className="border-t border-panel-border/80 bg-panel-black py-4 text-center text-[11px] text-zinc-600 font-mono flex-shrink-0 mb-14 lg:mb-0">
           <p>Planner de Conteúdo Multicanal v2026 • Cores personalizadas em Roxo, Laranja, Preto & Branco</p>
         </footer>
+
+        {/* 6. MOBILE BOTTOM NAVIGATION BAR FOR ANDROID & MOBILE PHONES */}
+        <MobileBottomNav
+          activeView={activeView}
+          setActiveView={setActiveView}
+          onNewPostClick={handleOpenCreateDialog}
+          onOpenMobileMenu={() => setMobileSidebarOpen(true)}
+        />
 
         </>
         )}
