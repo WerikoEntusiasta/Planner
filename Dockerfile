@@ -1,7 +1,7 @@
 # --- Step 1: Build Stage ---
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
-# Install build tools for native modules (better-sqlite3)
+# Install build tools for native modules
 RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
@@ -22,10 +22,10 @@ RUN npm run build
 RUN npm prune --production
 
 # --- Step 2: Production Stage ---
-FROM node:20-alpine
+FROM node:22-alpine
 
-# Install libstdc++ required by native better-sqlite3 bindings
-RUN apk add --no-cache libstdc++
+# Install libstdc++ required by native binaries
+RUN apk add --no-cache libstdc++ wget
 
 WORKDIR /app
 
@@ -34,14 +34,15 @@ COPY package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 
-# Create the /dados directory inside the container for SQLite volume mapping
-RUN mkdir -p /dados
+# Create directories for data and media uploads
+RUN mkdir -p /dados /app/public/uploads
 
-# Expose port 3000 (standard full-stack port)
+# Expose port 3000
 EXPOSE 3000
 
 # Configure production environment
 ENV NODE_ENV=production
+ENV PORT=3000
 
 # Start the application
 CMD ["npm", "run", "start"]

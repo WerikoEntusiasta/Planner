@@ -1,21 +1,4 @@
-// Capacitor configuration for Android APK builds
-export interface CapacitorConfig {
-  appId: string;
-  appName: string;
-  webDir: string;
-  server?: {
-    androidScheme?: string;
-    cleartext?: boolean;
-    url?: string;
-  };
-  android?: {
-    allowMixedContent?: boolean;
-    buildOptions?: {
-      keystorePath?: string;
-      releaseType?: string;
-    };
-  };
-}
+import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.planner.studio',
@@ -26,10 +9,7 @@ const config: CapacitorConfig = {
     cleartext: true
   },
   android: {
-    allowMixedContent: true,
-    buildOptions: {
-      releaseType: 'APK'
-    }
+    allowMixedContent: true
   }
 };
 

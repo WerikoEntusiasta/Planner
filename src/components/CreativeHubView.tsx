@@ -128,6 +128,8 @@ export default function CreativeHubView({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
+  const [uploadStatusMsg, setUploadStatusMsg] = useState<string>('');
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -377,10 +379,10 @@ export default function CreativeHubView({
     setIsAIModalOpen(false);
   };
 
-  // Upload Assets
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  // Upload Assets Processor
+  const processFiles = async (filesList: FileList | File[]) => {
+    const files = Array.from(filesList);
+    if (files.length === 0) return;
 
     if (formAssets.length + files.length > 20) {
       setUploadError('Um carrossel permite no máximo 20 imagens ou vídeos.');
@@ -394,26 +396,22 @@ export default function CreativeHubView({
       const newAssets: CreativeAsset[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm|ogg|m4v)$/i);
+        const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm|ogg|m4v|mkv)$/i);
+        const fileSizeMb = (file.size / (1024 * 1024)).toFixed(1);
+
+        setUploadStatusMsg(`Enviando ${isVideo ? 'vídeo' : 'imagem'} ${i + 1} de ${files.length} (${fileSizeMb} MB)...`);
 
         if (isVideo) {
-          // Read video as DataURL
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = (err) => reject(err);
-            reader.readAsDataURL(file);
-          });
-
-          // Detect video dimensions for auto aspect-ratio
+          // 1. Detect video dimensions & auto set aspect ratio
           try {
+            const tempObjUrl = URL.createObjectURL(file);
             const videoEl = document.createElement('video');
             videoEl.preload = 'metadata';
-            videoEl.src = dataUrl;
+            videoEl.src = tempObjUrl;
             await new Promise((res) => {
               videoEl.onloadedmetadata = () => res(true);
               videoEl.onerror = () => res(false);
-              setTimeout(() => res(false), 2000);
+              setTimeout(() => res(false), 2500);
             });
 
             if (videoEl.videoWidth && videoEl.videoHeight) {
@@ -428,29 +426,40 @@ export default function CreativeHubView({
                 setFormAspectRatio('1:1');
               }
             }
+            URL.revokeObjectURL(tempObjUrl);
           } catch (dimErr) {
             console.warn('Video dimension detection warning:', dimErr);
           }
 
-          let finalUrl = dataUrl;
-
-          // Attempt uploading to permanent server storage
+          // 2. Stream video file to /api/upload-media via FormData
+          let finalUrl = '';
           try {
+            const formData = new FormData();
+            formData.append('file', file);
             const uploadRes = await fetch('/api/upload-media', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                data: dataUrl,
-                filename: file.name,
-                type: 'video'
-              })
+              body: formData
             });
             const uploadData = await uploadRes.json();
             if (uploadRes.ok && uploadData.url) {
               finalUrl = uploadData.url;
             }
           } catch (uploadErr) {
-            console.warn('Fallback to embedded base64 video URL:', uploadErr);
+            console.warn('Direct video upload failed, trying fallback:', uploadErr);
+          }
+
+          // Fallback if network was unavailable
+          if (!finalUrl) {
+            if (file.size < 35 * 1024 * 1024) {
+              finalUrl = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result as string);
+                reader.onerror = (err) => reject(err);
+                reader.readAsDataURL(file);
+              });
+            } else {
+              finalUrl = URL.createObjectURL(file);
+            }
           }
 
           newAssets.push({
@@ -461,33 +470,32 @@ export default function CreativeHubView({
             size: file.size,
             format: file.type.split('/')[1] || 'mp4',
             order: formAssets.length + i,
-            title: `Vídeo: ${file.name.slice(0, 20)}`
+            title: `Vídeo: ${file.name.slice(0, 24)}`
           });
 
           if (formFormat !== 'carousel' && files.length === 1) {
             setFormFormat('video');
           }
         } else {
-          const compressedDataUrl = await compressImageFile(file);
-          let finalUrl = compressedDataUrl;
-
-          // Attempt uploading to permanent server storage
+          // Image upload with direct stream or compression fallback
+          let finalUrl = '';
           try {
+            const formData = new FormData();
+            formData.append('file', file);
             const uploadRes = await fetch('/api/upload-media', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                data: compressedDataUrl,
-                filename: file.name,
-                type: 'image'
-              })
+              body: formData
             });
             const uploadData = await uploadRes.json();
             if (uploadRes.ok && uploadData.url) {
               finalUrl = uploadData.url;
             }
           } catch (uploadErr) {
-            console.warn('Fallback to base64 image URL:', uploadErr);
+            console.warn('Image server upload fallback:', uploadErr);
+          }
+
+          if (!finalUrl) {
+            finalUrl = await compressImageFile(file);
           }
 
           newAssets.push({
@@ -504,14 +512,29 @@ export default function CreativeHubView({
       }
 
       setFormAssets(prev => [...prev, ...newAssets]);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error processing files:', err);
-      setUploadError('Erro ao carregar os arquivos. Tente novamente.');
+      setUploadError('Erro ao carregar os arquivos de mídia. Tente novamente.');
     } finally {
       setIsProcessingFiles(false);
+      setUploadStatusMsg('');
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processFiles(e.target.files);
+    }
+  };
+
+  const handleDropFiles = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processFiles(e.dataTransfer.files);
     }
   };
 
@@ -1151,6 +1174,7 @@ export default function CreativeHubView({
           onOpenObservationsModal={() => setIsObservationsModalOpen(true)}
           onOpenCaptionEditor={handleOpenCaptionEditor}
           onOpenEditModal={handleOpenEditModal}
+          onDeleteCreative={handleDeleteCreative}
           onMarkAsPosted={handleMarkAsPosted}
           onOpenScheduleModal={handleOpenScheduleModal}
           onViewAsClient={handleViewAsClient}
@@ -2075,30 +2099,47 @@ export default function CreativeHubView({
                 {/* UPLOAD DROPZONE */}
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-zinc-800 hover:border-purple-500/50 bg-zinc-900/50 rounded-2xl p-6 text-center transition-all cursor-pointer group"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDraggingOver(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    setIsDraggingOver(false);
+                  }}
+                  onDrop={handleDropFiles}
+                  className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
+                    isDraggingOver 
+                      ? 'border-purple-500 bg-purple-600/10 scale-[1.01]' 
+                      : 'border-zinc-800 hover:border-purple-500/50 bg-zinc-900/50'
+                  }`}
                 >
                   <input
                     ref={fileInputRef}
                     type="file"
                     multiple={formFormat === 'carousel'}
-                    accept={formFormat === 'video' ? 'video/*' : 'image/*,video/*'}
+                    accept="video/*,video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.webm,.mkv,image/*,.jpg,.jpeg,.png,.webp"
                     onChange={handleFileUpload}
                     className="hidden"
                   />
-                  <div className="w-12 h-12 rounded-2xl bg-zinc-800 group-hover:bg-purple-600/20 text-zinc-400 group-hover:text-purple-400 flex items-center justify-center mx-auto mb-2 transition-all">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mx-auto mb-2 transition-all ${
+                    isProcessingFiles 
+                      ? 'bg-purple-600/20 text-purple-400'
+                      : 'bg-zinc-800 group-hover:bg-purple-600/20 text-zinc-400 group-hover:text-purple-400'
+                  }`}>
                     {isProcessingFiles ? (
-                      <RefreshCw size={22} className="animate-spin" />
+                      <RefreshCw size={22} className="animate-spin text-purple-400" />
                     ) : (
                       <Upload size={22} />
                     )}
                   </div>
                   <p className="text-xs font-bold text-white mb-0.5">
-                    {isProcessingFiles ? 'Processando arquivos...' : 'Clique para selecionar imagens ou vídeos'}
+                    {isProcessingFiles ? (uploadStatusMsg || 'Processando e enviando mídia...') : 'Clique ou arraste imagens e vídeos aqui'}
                   </p>
                   <p className="text-[11px] text-zinc-500">
                     {formFormat === 'carousel'
-                      ? 'Selecione até 20 imagens de uma vez só para montar o carrossel'
-                      : 'Suporte a MP4, MOV, WEBM e imagens de alta resolução'}
+                      ? 'Selecione até 20 mídias para montar o carrossel'
+                      : 'Suporte a MP4, MOV, WEBM, MKV e fotos de alta resolução'}
                   </p>
                 </div>
 
@@ -2106,68 +2147,88 @@ export default function CreativeHubView({
                 {formAssets.length > 0 && (
                   <div className="space-y-2">
                     <span className="text-[11px] font-mono text-zinc-400 block">
-                      Ordenação dos Slides ({formAssets.length} itens):
+                      Mídias do Criativo ({formAssets.length} {formAssets.length === 1 ? 'item' : 'itens'}):
                     </span>
 
                     <div className="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 bg-zinc-950/60 rounded-2xl border border-zinc-800">
-                      {formAssets.map((asset, idx) => (
-                        <div
-                          key={asset.id || idx}
-                          className={`relative aspect-square rounded-xl overflow-hidden border-2 group ${
-                            idx === previewSlideIndex ? 'border-purple-500' : 'border-zinc-800'
-                          }`}
-                        >
-                          <img
-                            src={asset.url}
-                            alt={`Slide ${idx + 1}`}
-                            className="w-full h-full object-cover"
-                          />
-                          <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono font-bold text-white">
-                            {idx + 1}
-                          </span>
+                      {formAssets.map((asset, idx) => {
+                        const isVid = asset.type === 'video' || (asset.url && (asset.url.match(/\.(mp4|mov|webm|ogg|m4v|mkv)/i) || asset.url.startsWith('data:video/')));
 
-                          {/* REORDER / DELETE ACTIONS OVERLAY */}
-                          <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
-                            {idx > 0 && (
+                        return (
+                          <div
+                            key={asset.id || idx}
+                            className={`relative aspect-square rounded-xl overflow-hidden border-2 group bg-black ${
+                              idx === previewSlideIndex ? 'border-purple-500' : 'border-zinc-800'
+                            }`}
+                          >
+                            {isVid ? (
+                              <div className="w-full h-full relative bg-zinc-900 flex items-center justify-center">
+                                <video
+                                  src={asset.url}
+                                  className="w-full h-full object-cover opacity-80"
+                                  preload="metadata"
+                                  muted
+                                  playsInline
+                                />
+                                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                  <Film size={16} className="text-orange-400 drop-shadow" />
+                                </div>
+                              </div>
+                            ) : (
+                              <img
+                                src={asset.url}
+                                alt={`Slide ${idx + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            )}
+                            <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/80 text-[9px] font-mono font-bold text-white flex items-center gap-0.5 shadow">
+                              {isVid && <Film size={8} className="text-orange-400" />}
+                              <span>{idx + 1}</span>
+                            </span>
+
+                            {/* REORDER / DELETE ACTIONS OVERLAY */}
+                            <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                              {idx > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveAsset(idx, 'left');
+                                  }}
+                                  className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px] cursor-pointer"
+                                  title="Mover para esquerda"
+                                >
+                                  ◀
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleMoveAsset(idx, 'left');
+                                  handleRemoveAsset(idx);
                                 }}
-                                className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px]"
-                                title="Mover para esquerda"
+                                className="p-1 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] cursor-pointer"
+                                title="Remover item"
                               >
-                                ◀
+                                ✕
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveAsset(idx);
-                              }}
-                              className="p-1 rounded bg-red-600 hover:bg-red-500 text-white text-[10px]"
-                              title="Remover slide"
-                            >
-                              ✕
-                            </button>
-                            {idx < formAssets.length - 1 && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleMoveAsset(idx, 'right');
-                                }}
-                                className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px]"
-                                title="Mover para direita"
-                              >
-                                ▶
-                              </button>
-                            )}
+                              {idx < formAssets.length - 1 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveAsset(idx, 'right');
+                                  }}
+                                  className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white text-[10px] cursor-pointer"
+                                  title="Mover para direita"
+                                >
+                                  ▶
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -2178,13 +2239,29 @@ export default function CreativeHubView({
 
             {/* MODAL FOOTER */}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-4 border-t border-zinc-800/80">
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="px-5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-400 hover:text-white transition-all cursor-pointer text-center"
-              >
-                Cancelar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-400 hover:text-white transition-all cursor-pointer text-center"
+                >
+                  Cancelar
+                </button>
+
+                {editingCreative && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsModalOpen(false);
+                      handleDeleteCreative(editingCreative.id);
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Trash2 size={13} />
+                    <span>Excluir Criativo</span>
+                  </button>
+                )}
+              </div>
 
               <div className="flex items-center gap-2">
                 <button

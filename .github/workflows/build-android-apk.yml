@@ -14,6 +14,10 @@ jobs:
     name: Build & Release Android APK
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,6 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
       - name: Setup Java JDK 17
         uses: actions/setup-java@v4
@@ -29,30 +34,29 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
 
-      - name: Install Dependencies
+      - name: Install Node Dependencies
         run: |
           npm install --legacy-peer-deps --no-audit --no-fund
 
-      - name: Build Web Application
+      - name: Build Web Assets (Vite)
         run: |
           npx vite build
         env:
           NODE_ENV: production
 
-      - name: Install & Configure Capacitor CLI & Android
+      - name: Initialize & Sync Capacitor Android
         run: |
-          npm install --save-dev @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest --legacy-peer-deps --no-audit --no-fund
           if [ ! -d "android" ]; then
             npx cap add android
           fi
           npx cap sync android
 
-      - name: Setup Android Permissions & Cleartext Traffic
+      - name: Ensure Android Network Permissions
         run: |
-          # Ensure AndroidManifest has internet permission
           MANIFEST_FILE="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST_FILE" ]; then
             if ! grep -q "android.permission.INTERNET" "$MANIFEST_FILE"; then
@@ -66,21 +70,20 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Locate & Copy APK File
+      - name: Locate & Prepare APK
         id: find_apk
         run: |
-          echo "Procurando arquivos APK gerados pelo Gradle..."
-          find android -name "*.apk"
+          echo "Buscando APK gerado..."
           APK_FILE=$(find android/app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_FILE" ]; then
-            echo "::error::Nenhum arquivo APK foi encontrado após a compilação do Gradle."
+            echo "::error::Nenhum arquivo APK foi encontrado após o build do Gradle."
             exit 1
           fi
           echo "APK encontrado com sucesso em: $APK_FILE"
           cp "$APK_FILE" PlannerStudio-release.apk
           echo "apk_path=PlannerStudio-release.apk" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK as GitHub Artifact
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PlannerStudio-Android-APK
@@ -92,20 +95,20 @@ jobs:
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         continue-on-error: true
         with:
-          tag_name: apk-v${{ github.run_number }}
-          name: Planner Studio Android App v${{ github.run_number }}
+          tag_name: v${{ github.run_number }}-apk
+          name: Planner Studio Android App (Build #${{ github.run_number }})
           body: |
             ## 📱 Planner Studio - App Android Oficial
 
-            APK compilado automaticamente com sucesso pelo GitHub Actions.
+            APK compilado e gerado automaticamente com sucesso.
 
             - **Build Number:** #${{ github.run_number }}
             - **Commit:** `${{ github.sha }}`
             - **Branch:** `${{ github.ref_name }}`
 
-            ### Como instalar no celular:
-            1. Baixe o arquivo **PlannerStudio-release.apk** abaixo no seu aparelho Android.
-            2. Toque no arquivo baixado e confirme a instalação (autorize a instalação de fontes desconhecidas se solicitado).
+            ### 📥 Como instalar no celular:
+            1. Baixe o arquivo **PlannerStudio-release.apk** anexado abaixo.
+            2. Abra o arquivo no celular Android e confirme a instalação (ative "Permitir desta fonte" se o Android solicitar).
           files: |
             PlannerStudio-release.apk
         env:

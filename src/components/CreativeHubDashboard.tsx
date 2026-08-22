@@ -3,7 +3,8 @@ import { Creative, Client, User, CreativeFormat, CreativeStatus } from '../types
 import { 
   Layers, Clock, CheckCircle2, MessageSquare, Calendar, Rocket, 
   XCircle, Copy, Check, Share2, ExternalLink, Sparkles, Plus, 
-  Bookmark, AlignLeft, Image as ImageIcon, Film, ArrowRight, Eye, Edit3
+  Bookmark, AlignLeft, Image as ImageIcon, Film, ArrowRight, Eye, Edit3,
+  Trash2
 } from 'lucide-react';
 
 export type CreativeSubMenu = 'dashboard' | 'changes_requested' | 'approved' | 'scheduled' | 'posted' | 'rejected' | 'observations';
@@ -18,6 +19,7 @@ interface CreativeHubDashboardProps {
   onOpenObservationsModal: () => void;
   onOpenCaptionEditor: (creative: Creative) => void;
   onOpenEditModal: (creative: Creative) => void;
+  onDeleteCreative?: (id: string) => void;
   onMarkAsPosted: (creative: Creative) => void;
   onOpenScheduleModal: (creative: Creative) => void;
   onViewAsClient: (shareToken: string, focus?: 'all' | 'visual' | 'caption') => void;
@@ -42,6 +44,7 @@ export default function CreativeHubDashboard({
   onOpenObservationsModal,
   onOpenCaptionEditor,
   onOpenEditModal,
+  onDeleteCreative,
   onMarkAsPosted,
   onOpenScheduleModal,
   onViewAsClient,
@@ -431,6 +434,19 @@ export default function CreativeHubDashboard({
                   )}
 
                   <div className="flex items-center justify-end gap-2 pt-1">
+                    {onDeleteCreative && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteCreative(c.id);
+                        }}
+                        className="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                        title="Excluir este criativo"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                     <button
                       onClick={() => onOpenCaptionEditor(c)}
                       className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 text-[11px] font-semibold hover:bg-amber-500/30 cursor-pointer"
@@ -482,9 +498,24 @@ export default function CreativeHubDashboard({
                 <div key={c.id} className="p-3 bg-[#17171F] border border-blue-500/20 rounded-xl space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-mono text-purple-300 font-bold uppercase">{c.clientName || 'Cliente'}</span>
-                    <span className="text-[10px] text-blue-400 font-mono font-bold flex items-center gap-1">
-                      <CheckCircle2 size={10} /> Aprovado
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-blue-400 font-mono font-bold flex items-center gap-1">
+                        <CheckCircle2 size={10} /> Aprovado
+                      </span>
+                      {onDeleteCreative && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteCreative(c.id);
+                          }}
+                          className="p-1 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                          title="Excluir este criativo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <h4 className="text-xs font-semibold text-white line-clamp-1">{c.title}</h4>
                   
@@ -541,47 +572,138 @@ export default function CreativeHubDashboard({
             {recentCreatives.map(c => {
               const firstAsset = c.assets?.[0];
               const isCarousel = c.format === 'carousel' || (c.assets || []).length > 1;
-              const isVideo = c.format === 'video' || firstAsset?.type === 'video';
+              const isVideo = c.format === 'video' || firstAsset?.type === 'video' || (firstAsset?.url && (firstAsset.url.match(/\.(mp4|webm|ogg|mov|m4v)/i) || firstAsset.url.startsWith('data:video/')));
 
               return (
                 <div
                   key={c.id}
-                  onClick={() => onViewAsClient(c.shareToken, 'all')}
-                  className="bg-[#17171F] border border-[#24242D] hover:border-purple-500/40 rounded-xl overflow-hidden cursor-pointer group transition-all"
+                  className="bg-[#17171F] border border-[#24242D] hover:border-purple-500/40 rounded-xl overflow-hidden group transition-all flex flex-col justify-between"
                 >
-                  <div className="aspect-video bg-black relative flex items-center justify-center overflow-hidden">
-                    {firstAsset ? (
-                      isVideo ? (
-                        <video src={firstAsset.url} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform" />
+                  <div>
+                    {/* THUMBNAIL AREA */}
+                    <div 
+                      onClick={() => onViewAsClient(c.shareToken, 'all')}
+                      className="aspect-video bg-black relative flex items-center justify-center overflow-hidden cursor-pointer"
+                    >
+                      {firstAsset ? (
+                        isVideo ? (
+                          <video src={firstAsset.url} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform" />
+                        ) : (
+                          <img src={firstAsset.url} alt={c.title} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform" />
+                        )
                       ) : (
-                        <img src={firstAsset.url} alt={c.title} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform" />
-                      )
-                    ) : (
-                      <ImageIcon size={24} className="text-zinc-600" />
-                    )}
-                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono text-zinc-200">
-                      {isCarousel ? `Carrossel (${c.assets?.length || 0})` : isVideo ? 'Vídeo' : 'Imagem'}
-                    </span>
-                    <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold ${
-                      c.status === 'approved' ? 'bg-blue-500/80 text-white' :
-                      c.status === 'changes_requested' ? 'bg-amber-500/80 text-black' :
-                      c.status === 'scheduled' ? 'bg-purple-500/80 text-white' :
-                      c.status === 'posted' ? 'bg-emerald-500/80 text-white' :
-                      c.status === 'rejected' ? 'bg-red-500/80 text-white' :
-                      'bg-orange-500/80 text-white'
-                    }`}>
-                      {c.status === 'approved' ? 'Aprovado' :
-                       c.status === 'changes_requested' ? 'Ajustes' :
-                       c.status === 'scheduled' ? 'Agendado' :
-                       c.status === 'posted' ? 'Postado' :
-                       c.status === 'rejected' ? 'Rejeitado' :
-                       'Pendente'}
-                    </span>
+                        <ImageIcon size={24} className="text-zinc-600" />
+                      )}
+
+                      {/* FORMAT BADGE */}
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono text-zinc-200 shadow">
+                        {isCarousel ? `Carrossel (${c.assets?.length || 0})` : isVideo ? 'Vídeo' : 'Imagem'}
+                      </span>
+
+                      {/* STATUS BADGE */}
+                      <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold shadow ${
+                        c.status === 'approved' ? 'bg-blue-500/90 text-white' :
+                        c.status === 'changes_requested' ? 'bg-amber-500/90 text-black' :
+                        c.status === 'scheduled' ? 'bg-purple-500/90 text-white' :
+                        c.status === 'posted' ? 'bg-emerald-500/90 text-white' :
+                        c.status === 'rejected' ? 'bg-red-500/90 text-white' :
+                        'bg-orange-500/90 text-white'
+                      }`}>
+                        {c.status === 'approved' ? 'Aprovado' :
+                         c.status === 'changes_requested' ? 'Ajustes' :
+                         c.status === 'scheduled' ? 'Agendado' :
+                         c.status === 'posted' ? 'Postado' :
+                         c.status === 'rejected' ? 'Rejeitado' :
+                         'Pendente'}
+                      </span>
+
+                      {/* QUICK HOVER ACTIONS */}
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onViewAsClient(c.shareToken, 'all');
+                          }}
+                          className="p-2 rounded-xl bg-white text-black hover:bg-zinc-200 transition-transform hover:scale-105 cursor-pointer shadow-lg"
+                          title="Visualizar Aprovação"
+                        >
+                          <Eye size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenEditModal(c);
+                          }}
+                          className="p-2 rounded-xl bg-zinc-900 border border-zinc-700 text-white hover:bg-zinc-800 transition-transform hover:scale-105 cursor-pointer shadow-lg"
+                          title="Editar Criativo"
+                        >
+                          <Edit3 size={15} />
+                        </button>
+                        {onDeleteCreative && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteCreative(c.id);
+                            }}
+                            className="p-2 rounded-xl bg-red-600/90 text-white hover:bg-red-500 transition-transform hover:scale-105 cursor-pointer shadow-lg"
+                            title="Apagar / Excluir Criativo"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* CARD INFO */}
+                    <div className="p-3 space-y-1">
+                      <div className="text-[10px] font-mono text-purple-400 font-semibold uppercase">{c.clientName || 'Cliente'}</div>
+                      <div 
+                        onClick={() => onViewAsClient(c.shareToken, 'all')}
+                        className="text-xs font-bold text-white line-clamp-1 hover:text-purple-300 cursor-pointer transition-colors"
+                      >
+                        {c.title}
+                      </div>
+                    </div>
                   </div>
-                  <div className="p-3 space-y-1">
-                    <div className="text-[10px] font-mono text-purple-400 font-semibold uppercase">{c.clientName || 'Cliente'}</div>
-                    <div className="text-xs font-bold text-white line-clamp-1">{c.title}</div>
+
+                  {/* CARD ACTIONS FOOTER */}
+                  <div className="p-2.5 pt-0 flex items-center justify-between gap-1.5 border-t border-zinc-800/60 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => onViewAsClient(c.shareToken, 'all')}
+                      className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <Eye size={11} />
+                      <span>Ver</span>
+                    </button>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onOpenEditModal(c)}
+                        className="p-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[11px] cursor-pointer transition-colors"
+                        title="Editar post"
+                      >
+                        <Edit3 size={12} />
+                      </button>
+
+                      {onDeleteCreative && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteCreative(c.id)}
+                          className="px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/25 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Apagar este criativo"
+                        >
+                          <Trash2 size={12} />
+                          <span>Apagar</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
+
                 </div>
               );
             })}

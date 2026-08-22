@@ -18,22 +18,25 @@ x-casaos:
     en_us: Premium Multichannel Content Planner SaaS
     pt_br: Planner de Conteúdo Multicanal SaaS Premium
   description:
-    en_us: A premium multichannel content planner for creators and marketing teams with client approvals, coming-soon AI content script generators, and interactive goals trackers.
-    pt_br: Um planejador de conteúdo multicanal premium para criadores e equipes de marketing, com aprovação rápida de clientes, gerador de roteiros por IA e acompanhamento de metas.
+    en_us: A premium multichannel content planner for creators and marketing teams with client approvals, video/image media uploads, and interactive goals trackers.
+    pt_br: Um planejador de conteúdo multicanal premium para criadores e equipes de marketing, com aprovação rápida de clientes, upload de vídeos/imagens e acompanhamento de metas.
 
 services:
   creator-planner:
     build:
       context: .
       dockerfile: Dockerfile
-    image: werikoliveira/planner:0.1
+    image: werikoliveira/planner:0.2
     container_name: creator_planner_saas
     ports:
       - "3000:3000"
     volumes:
       - /DATA/AppData/creator-planner/dados:/dados
+      - /DATA/AppData/creator-planner/uploads:/app/public/uploads
     environment:
       - TZ=America/Sao_Paulo
+      - PORT=3000
+      - NODE_ENV=production
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
@@ -50,6 +53,12 @@ services:
       - STRIPE_PRICE_GROWTH_MONTHLY_USD=${STRIPE_PRICE_GROWTH_MONTHLY_USD}
       - STRIPE_PRICE_GROWTH_QUARTERLY_USD=${STRIPE_PRICE_GROWTH_QUARTERLY_USD}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     logging:
       driver: "json-file"
       options:
