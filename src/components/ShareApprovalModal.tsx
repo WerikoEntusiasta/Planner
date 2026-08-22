@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Share2, Copy, Check, ExternalLink, ShieldCheck, Sparkles, MessageCircle, X } from 'lucide-react';
+import { Share2, Copy, Check, ExternalLink, ShieldCheck, Sparkles, MessageCircle, X, Download, Lock, CheckCircle2 } from 'lucide-react';
 import { Post, Client } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
 
@@ -18,12 +18,14 @@ export default function ShareApprovalModal({
 }: ShareApprovalModalProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedPostId, setSelectedPostId] = useState<string>(posts[0]?.id || '');
+  const [allowMediaDownload, setAllowMediaDownload] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
   const origin = window.location.origin;
   const currentPost = posts.find(p => p.id === selectedPostId) || posts[0];
-  const postApprovalUrl = currentPost ? `${origin}/?approvePostId=${currentPost.id}` : '';
+  const downloadParam = allowMediaDownload ? '&allowDownload=1' : '&allowDownload=0';
+  const postApprovalUrl = currentPost ? `${origin}/?approvePostId=${currentPost.id}${downloadParam}` : '';
   const clientName = client?.name || 'Cliente';
 
   const handleCopy = async (text: string, id: string) => {
@@ -36,7 +38,8 @@ export default function ShareApprovalModal({
   };
 
   const whatsappMessage = encodeURIComponent(
-    `Olá ${clientName}! Segue o link para revisar e aprovar o novo roteiro de conteúdo: ${postApprovalUrl}`
+    `Olá ${clientName}! Segue o link para revisar e aprovar o novo roteiro de conteúdo: ${postApprovalUrl}` +
+    (allowMediaDownload ? ` (Download de mídias liberado)` : '')
   );
 
   return (
@@ -89,7 +92,7 @@ export default function ShareApprovalModal({
               <select
                 value={selectedPostId}
                 onChange={(e) => setSelectedPostId(e.target.value)}
-                className="w-full bg-panel-card border border-panel-border rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-accent-orange"
+                className="w-full bg-panel-card border border-panel-border rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-accent-orange cursor-pointer"
               >
                 {posts.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -99,6 +102,69 @@ export default function ShareApprovalModal({
               </select>
             </div>
           )}
+
+          {/* MEDIA DOWNLOAD PERMISSION TOGGLE CARD */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-zinc-900/90 to-zinc-950 border border-zinc-800 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2 rounded-xl border ${
+                  allowMediaDownload 
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' 
+                    : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-400'
+                }`}>
+                  {allowMediaDownload ? <Download size={18} /> : <Lock size={18} />}
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <span>Permitir Download de Mídias</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase ${
+                      allowMediaDownload ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-400'
+                    }`}>
+                      {allowMediaDownload ? 'Liberado' : 'Bloqueado'}
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    O cliente poderá baixar as imagens e vídeos ao abrir o link?
+                  </p>
+                </div>
+              </div>
+
+              {/* Interactive Switch */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={allowMediaDownload}
+                onClick={() => setAllowMediaDownload(prev => !prev)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  allowMediaDownload ? 'bg-emerald-500' : 'bg-zinc-800'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    allowMediaDownload ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="text-[10px] font-mono text-zinc-400 bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 flex items-center gap-2">
+              {allowMediaDownload ? (
+                <>
+                  <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                  <span className="text-emerald-300">
+                    O cliente verá botões para baixar os arquivos originais em alta resolução.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Lock size={13} className="text-zinc-500 shrink-0" />
+                  <span>
+                    Apenas visualização em tela. Botões de download ficam ocultos para o cliente.
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
 
           {/* Direct Link Box */}
           {postApprovalUrl && (
@@ -171,3 +237,4 @@ export default function ShareApprovalModal({
     </div>
   );
 }
+

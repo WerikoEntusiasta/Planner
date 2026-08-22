@@ -85,6 +85,7 @@ export interface Post {
   approvalStatus?: 'draft' | 'pending' | 'approved' | 'rejected';
   approvalFeedback?: string;
   approvalDate?: string;
+  allowDownload?: boolean;
   connectedAccountId?: string; // Connected client social account ID via OAuth
 }
 
@@ -253,6 +254,7 @@ export interface Creative {
   assets: CreativeAsset[];
   aspectRatio?: '1:1' | '4:5' | '9:16' | '16:9';
   shareToken: string;
+  allowDownload?: boolean;
   clientFeedback?: string;
   approvalDate?: string;
   createdAt: string;

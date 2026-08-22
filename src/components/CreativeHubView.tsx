@@ -8,7 +8,7 @@ import {
   Search, Filter, Smartphone, RefreshCw, Upload, Eye, Layers, 
   CheckCheck, Share2, HelpCircle, Shield, AlignLeft, FileText, 
   Wand2, MessageCircle, MoreHorizontal, Bookmark, Lightbulb, AlertTriangle,
-  Calendar, Rocket, XCircle, RotateCcw
+  Calendar, Rocket, XCircle, RotateCcw, Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ClientCreativeApprovalPage from './ClientCreativeApprovalPage';
@@ -17,6 +17,7 @@ import ClientObservationsModal from './ClientObservationsModal';
 import ClientObservationsSection from './ClientObservationsSection';
 import CreativeHubDashboard, { CreativeSubMenu } from './CreativeHubDashboard';
 import CreativeScheduleModal from './CreativeScheduleModal';
+import ShareCreativeModal from './ShareCreativeModal';
 
 interface CreativeHubViewProps {
   clients: Client[];
@@ -72,6 +73,30 @@ export default function CreativeHubView({
   const [previewingShareToken, setPreviewingShareToken] = useState<string | null>(null);
   const [previewingHubClientId, setPreviewingHubClientId] = useState<string | null>(null);
   const [previewingFocus, setPreviewingFocus] = useState<'all' | 'visual' | 'caption'>('all');
+
+  // Share Modal State
+  const [shareModalConfig, setShareModalConfig] = useState<{
+    isOpen: boolean;
+    creative?: Creative | null;
+    clientId?: string;
+    focus?: 'all' | 'visual' | 'caption';
+    mode?: 'single' | 'hub';
+  }>({ isOpen: false });
+
+  const handleOpenShareModal = (
+    creative?: Creative | null,
+    clientId?: string,
+    focus: 'all' | 'visual' | 'caption' = 'all',
+    mode: 'single' | 'hub' = creative ? 'single' : 'hub'
+  ) => {
+    setShareModalConfig({
+      isOpen: true,
+      creative: creative || null,
+      clientId: clientId || selectedClientId,
+      focus,
+      mode
+    });
+  };
 
   // Modal State for Creating/Editing full creative
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1054,6 +1079,7 @@ export default function CreativeHubView({
           onShareGeneralWhatsApp={handleShareGeneralWhatsApp}
           onShareGeneralCaptionWhatsApp={handleShareGeneralCaptionWhatsApp}
           onPreviewGeneralHub={handlePreviewGeneralHub}
+          onOpenShareModal={handleOpenShareModal}
           copiedGeneralLink={copiedGeneralLink}
           copiedGeneralCaptionLink={copiedGeneralCaptionLink}
           observationsCount={observations.length}
@@ -1537,21 +1563,21 @@ export default function CreativeHubView({
                         <div className="flex items-center justify-between text-[#686873] pt-1">
                           <div className="flex items-center gap-1">
                             <button
-                              onClick={() => handleCopyLink(creative.shareToken, creative.id)}
-                              className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
-                              title="Copiar link"
+                              onClick={() => handleOpenShareModal(creative, creative.clientId, 'all', 'single')}
+                              className="p-1.5 rounded-lg bg-[#17171F] hover:bg-[#8B5CF6]/20 text-[#A78BFA] hover:text-white transition-all cursor-pointer text-xs flex items-center gap-1 font-semibold"
+                              title="Opções de compartilhamento e permissão de download"
                             >
-                              {copiedToken === (creative.shareToken || creative.id) ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                              <span className="text-[11px]">{copiedToken === (creative.shareToken || creative.id) ? 'Copiado' : 'Link'}</span>
+                              <Share2 size={12} />
+                              <span className="text-[11px]">Compartilhar</span>
                             </button>
 
                             <button
-                              onClick={() => handleShareWhatsApp(creative)}
-                              className="p-1.5 rounded-lg hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer text-xs flex items-center gap-1"
-                              title="WhatsApp"
+                              onClick={() => handleCopyLink(creative.shareToken, creative.id)}
+                              className="p-1.5 rounded-lg hover:bg-[#17171F] hover:text-[#F2F2F5] transition-all cursor-pointer text-xs flex items-center gap-1"
+                              title="Copiar link rápido"
                             >
-                              <Share2 size={12} />
-                              <span className="text-[11px]">WhatsApp</span>
+                              {copiedToken === (creative.shareToken || creative.id) ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                              <span className="text-[11px]">{copiedToken === (creative.shareToken || creative.id) ? 'Copiado' : 'Link'}</span>
                             </button>
                           </div>
 
@@ -2190,6 +2216,20 @@ export default function CreativeHubView({
         observations={observations}
         onSaveObservation={handleSaveObservation}
         onDeleteObservation={handleDeleteObservation}
+      />
+
+      {/* ========================================================================= */}
+      {/* 9. SHARE CREATIVE & HUB APPROVAL MODAL (WITH DOWNLOAD PERMISSION TOGGLE)  */}
+      {/* ========================================================================= */}
+      <ShareCreativeModal
+        isOpen={shareModalConfig.isOpen}
+        onClose={() => setShareModalConfig({ isOpen: false })}
+        creatives={creatives}
+        clients={clients}
+        initialCreative={shareModalConfig.creative}
+        initialClientId={shareModalConfig.clientId}
+        initialFocus={shareModalConfig.focus}
+        initialMode={shareModalConfig.mode}
       />
 
       {/* TOAST NOTIFICATION */}

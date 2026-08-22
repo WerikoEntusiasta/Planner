@@ -6,7 +6,8 @@ import {
   Film, Image as ImageIcon, CheckCircle2, Clock, ThumbsUp, 
   Share2, Maximize2, Shield, RefreshCw, Layers, ArrowLeft,
   CheckCheck, Filter, ThumbsDown, HelpCircle, ExternalLink,
-  FileText, Copy, AlignLeft, Hash, Edit3, MessageCircle
+  FileText, Copy, AlignLeft, Hash, Edit3, MessageCircle,
+  Download, Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { copyToClipboard } from '../utils/clipboard';
@@ -30,6 +31,14 @@ export default function ClientCreativeApprovalPage({
   const urlFocus = new URLSearchParams(window.location.search).get('focus') || 
                    new URLSearchParams(window.location.search).get('type') || 
                    (window.location.pathname.includes('/aprovar-legenda') ? 'caption' : initialFocus);
+
+  // Check URL query param for media download permission
+  const urlAllowDownload = new URLSearchParams(window.location.search).get('allowDownload') ||
+                           new URLSearchParams(window.location.search).get('download') ||
+                           new URLSearchParams(window.location.search).get('canDownload');
+  const isDownloadAllowed = urlAllowDownload !== null 
+    ? (urlAllowDownload === '1' || urlAllowDownload === 'true' || urlAllowDownload === 'yes')
+    : false;
 
   // Focus: 'all' | 'visual' | 'caption'
   const [approvalFocus, setApprovalFocus] = useState<'all' | 'visual' | 'caption'>(
@@ -71,6 +80,54 @@ export default function ClientCreativeApprovalPage({
   const showToast = (text: string, type: 'success' | 'info' | 'warning' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  // Media Download Helpers
+  const handleDownloadAsset = async (url: string, filename: string) => {
+    try {
+      showToast('Baixando arquivo em alta resolução...', 'info');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Fetch failed');
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+      showToast('Download concluído com sucesso! 📥', 'success');
+    } catch (e) {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      showToast('Download iniciado! 📥', 'info');
+    }
+  };
+
+  const handleDownloadAllAssets = async (creative: Creative) => {
+    const assets = creative.assets || [];
+    if (assets.length === 0) {
+      showToast('Nenhum arquivo de mídia encontrado neste criativo.', 'warning');
+      return;
+    }
+    showToast(`Iniciando download de ${assets.length} arquivo(s)... 📥`, 'info');
+    for (let i = 0; i < assets.length; i++) {
+      const asset = assets[i];
+      const ext = asset.type === 'video' ? 'mp4' : 'png';
+      const cleanTitle = (creative.title || 'criativo').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const filename = `${cleanTitle}_slide_${i + 1}.${ext}`;
+      await handleDownloadAsset(asset.url, filename);
+      if (assets.length > 1) {
+        await new Promise(r => setTimeout(r, 400));
+      }
+    }
   };
 
   // 1. Fetch data from server
@@ -802,6 +859,38 @@ export default function ClientCreativeApprovalPage({
       {viewMode === 'hub' && (
         <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8 space-y-6">
           
+          {/* PERMISSION / DOWNLOAD STATUS BAR */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 px-5 rounded-2xl bg-[#14141c] border border-zinc-800 shadow-md">
+            <div className="flex items-center gap-2.5 text-xs">
+              {isDownloadAllowed ? (
+                <>
+                  <span className="p-1.5 rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                    <Download size={15} />
+                  </span>
+                  <span className="text-zinc-200">
+                    <strong className="text-emerald-400 font-bold">Download de Mídias Liberado:</strong> Você pode baixar os criativos originais em alta resolução diretamente pela plataforma.
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="p-1.5 rounded-xl bg-zinc-800 text-zinc-400 border border-zinc-700">
+                    <Lock size={15} />
+                  </span>
+                  <span className="text-zinc-400">
+                    <strong className="text-zinc-300 font-bold">Modo de Visualização:</strong> Os arquivos estão protegidos para visualização e aprovação em tela.
+                  </span>
+                </>
+              )}
+            </div>
+
+            {isDownloadAllowed && (
+              <span className="text-[10px] font-mono font-bold uppercase px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
+                <CheckCircle2 size={12} className="text-emerald-400" />
+                <span>Download Ativado</span>
+              </span>
+            )}
+          </div>
+
           {/* HUB HERO SUMMARY BANNER */}
           <div className="p-6 md:p-8 bg-gradient-to-r from-purple-950/40 via-[#151520] to-orange-950/30 rounded-3xl border border-purple-500/20 shadow-2xl relative overflow-hidden">
             <div className="absolute top-0 right-0 w-80 h-80 bg-gradient-to-bl from-purple-600/10 via-orange-500/5 to-transparent rounded-full blur-3xl pointer-events-none" />
@@ -1334,6 +1423,19 @@ export default function ClientCreativeApprovalPage({
                             >
                               <Eye size={14} />
                             </button>
+
+                            {isDownloadAllowed && assets.length > 0 && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDownloadAllAssets(creative);
+                                }}
+                                className="p-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 transition-all cursor-pointer"
+                                title="Baixar arquivos em alta resolução"
+                              >
+                                <Download size={14} />
+                              </button>
+                            )}
                           </div>
                         )}
 
@@ -1360,36 +1462,53 @@ export default function ClientCreativeApprovalPage({
           <section className="lg:col-span-7 flex flex-col items-center">
             
             {/* TOP CONTROLS FOR VISUAL INSPECTION */}
-            <div className="w-full max-w-lg mb-4 flex items-center justify-between">
+            <div className="w-full max-w-lg mb-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
               <button
                 onClick={() => setViewMode('hub')}
-                className="text-xs font-bold text-zinc-400 hover:text-white flex items-center gap-1.5 cursor-pointer transition-colors bg-zinc-900/80 px-3 py-1.5 rounded-xl border border-zinc-800"
+                className="text-xs font-bold text-zinc-400 hover:text-white flex items-center justify-center gap-1.5 cursor-pointer transition-colors bg-zinc-900/80 px-3 py-2 rounded-xl border border-zinc-800"
               >
                 <ArrowLeft size={14} />
                 <span>Voltar à Central ({creatives.length} posts)</span>
               </button>
 
-              <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
-                <button
-                  onClick={() => setMockupMode('feed')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
-                    mockupMode === 'feed' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                  title="Simular visualização no feed do Instagram"
-                >
-                  <Smartphone size={12} />
-                  <span>Feed</span>
-                </button>
-                <button
-                  onClick={() => setMockupMode('clean')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
-                    mockupMode === 'clean' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                  title="Visualização limpa da arte"
-                >
-                  <Maximize2 size={12} />
-                  <span>Arte Pura</span>
-                </button>
+              <div className="flex items-center justify-end gap-2">
+                {isDownloadAllowed && activeSlide && (
+                  <button
+                    onClick={() => {
+                      const ext = isVideo ? 'mp4' : 'png';
+                      const cleanTitle = (activeCreative.title || 'criativo').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                      handleDownloadAsset(activeSlide.url, `${cleanTitle}_slide_${currentSlideIndex + 1}.${ext}`);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                    title="Baixar esta imagem/vídeo em alta resolução"
+                  >
+                    <Download size={13} />
+                    <span>{isCarousel ? `Baixar Slide ${currentSlideIndex + 1}` : 'Baixar Mídia'}</span>
+                  </button>
+                )}
+
+                <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+                  <button
+                    onClick={() => setMockupMode('feed')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                      mockupMode === 'feed' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title="Simular visualização no feed do Instagram"
+                  >
+                    <Smartphone size={12} />
+                    <span>Feed</span>
+                  </button>
+                  <button
+                    onClick={() => setMockupMode('clean')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                      mockupMode === 'clean' ? 'bg-zinc-800 text-white font-bold' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title="Visualização limpa da arte"
+                  >
+                    <Maximize2 size={12} />
+                    <span>Arte Pura</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1698,6 +1817,52 @@ export default function ClientCreativeApprovalPage({
                   {activeCreative.approvalDate && (
                     <span className="text-[10px] text-zinc-400 block mt-1">Data: {activeCreative.approvalDate}</span>
                   )}
+                </div>
+              )}
+
+              {/* MEDIA DOWNLOAD CARD (WHEN ALLOWED BY CREATOR) */}
+              {isDownloadAllowed && (
+                <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                        <Download size={15} />
+                      </div>
+                      <span className="text-xs font-bold text-white">Download de Arquivos Originais</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase bg-emerald-500/20 text-emerald-300">
+                      Alta Resolução
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-300">
+                    Você tem permissão para baixar os arquivos desta publicação em qualidade original:
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {activeSlide && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ext = isVideo ? 'mp4' : 'png';
+                          const cleanTitle = (activeCreative.title || 'criativo').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                          handleDownloadAsset(activeSlide.url, `${cleanTitle}_slide_${currentSlideIndex + 1}.${ext}`);
+                        }}
+                        className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                      >
+                        <Download size={13} />
+                        <span>Baixar Slide Atual ({currentSlideIndex + 1})</span>
+                      </button>
+                    )}
+                    {isCarousel && activeAssets.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadAllAssets(activeCreative)}
+                        className="py-2 px-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Download size={13} />
+                        <span>Baixar Todos ({activeAssets.length})</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

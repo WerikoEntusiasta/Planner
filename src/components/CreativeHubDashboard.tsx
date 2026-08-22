@@ -26,6 +26,7 @@ interface CreativeHubDashboardProps {
   onShareGeneralWhatsApp: (clientId?: string) => void;
   onShareGeneralCaptionWhatsApp: (clientId?: string) => void;
   onPreviewGeneralHub: (clientId?: string, focus?: 'all' | 'visual' | 'caption') => void;
+  onOpenShareModal?: (creative?: Creative | null, clientId?: string, focus?: 'all' | 'visual' | 'caption', mode?: 'single' | 'hub') => void;
   copiedGeneralLink: boolean;
   copiedGeneralCaptionLink: boolean;
   observationsCount: number;
@@ -49,6 +50,7 @@ export default function CreativeHubDashboard({
   onShareGeneralWhatsApp,
   onShareGeneralCaptionWhatsApp,
   onPreviewGeneralHub,
+  onOpenShareModal,
   copiedGeneralLink,
   copiedGeneralCaptionLink,
   observationsCount
@@ -155,15 +157,21 @@ export default function CreativeHubDashboard({
 
             <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={() => onCopyGeneralLink()}
+                onClick={() => {
+                  if (onOpenShareModal) {
+                    onOpenShareModal(null, selectedClientId !== 'all' ? selectedClientId : undefined, 'all', 'hub');
+                  } else {
+                    onCopyGeneralLink();
+                  }
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
                   copiedGeneralLink
                     ? 'bg-emerald-600 text-white'
                     : 'bg-[#8B5CF6] hover:bg-[#7C3AED] text-white'
                 }`}
               >
-                {copiedGeneralLink ? <Check size={14} /> : <Copy size={14} />}
-                <span>{copiedGeneralLink ? 'Link Copiado!' : 'Copiar Link da Central'}</span>
+                {copiedGeneralLink ? <Check size={14} /> : <Share2 size={14} />}
+                <span>{copiedGeneralLink ? 'Link Copiado!' : 'Compartilhar Central'}</span>
               </button>
 
               <button
@@ -203,15 +211,21 @@ export default function CreativeHubDashboard({
 
             <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={() => onCopyGeneralCaptionLink()}
+                onClick={() => {
+                  if (onOpenShareModal) {
+                    onOpenShareModal(null, selectedClientId !== 'all' ? selectedClientId : undefined, 'caption', 'hub');
+                  } else {
+                    onCopyGeneralCaptionLink();
+                  }
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
                   copiedGeneralCaptionLink
                     ? 'bg-emerald-600 text-white'
                     : 'bg-amber-600 hover:bg-amber-500 text-white'
                 }`}
               >
-                {copiedGeneralCaptionLink ? <Check size={14} /> : <Copy size={14} />}
-                <span>{copiedGeneralCaptionLink ? 'Link de Legendas Copiado!' : 'Copiar Link de Legendas'}</span>
+                {copiedGeneralCaptionLink ? <Check size={14} /> : <Share2 size={14} />}
+                <span>{copiedGeneralCaptionLink ? 'Link de Legendas Copiado!' : 'Compartilhar Legendas'}</span>
               </button>
 
               <button
